@@ -110,7 +110,7 @@ client.once('ready', () => {
   // Clean up expired cooldowns every hour
   setInterval(() => {
     voteManager.cleanupExpiredCooldowns(60 * 60 * 1000); // 1 hour
-    console.log('Cleaned up expired cooldowns');
+    console.log('Cleaned up expired cooldowns!');
   }, 60 * 60 * 1000);
 });
 

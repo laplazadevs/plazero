@@ -145,7 +145,7 @@ async function handleTibioReaction(reaction: MessageReaction, user: User): Promi
         ) as TextChannel;
         
         if (moderacionChannel) {
-          await moderacionChannel.send(`${user} recibió un timeout por votar como tibio`);
+          await moderacionChannel.send(`${user} recibió un timeout por votar como tibio.`);
         }
       }
     }

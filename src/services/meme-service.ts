@@ -50,7 +50,7 @@ export async function processMessages(interaction: ChatInputCommandInteraction):
   await announceWinners(interaction, topMemes, 'meme');
   await announceWinners(interaction, topBones, 'bone');
 
-  await interaction.followUp('Ganadores anunciados!');
+  await interaction.followUp('¡Ganadores anunciados!');
 }
 
 function getLastFridayAtNoon(): dayjs.Dayjs {
@@ -75,12 +75,12 @@ export async function fetchMessagesInRange(
   let iteration = 0;
 
   while (hasMoreMessages) {
-    console.log(`Fetching messages, iteration ${iteration}`);
+    console.log(`Fetching messages, iteration ${iteration}.`);
     const options: { limit: number; before?: string } = { limit: 100 };
     if (lastMessageId) options.before = lastMessageId;
 
     const fetchedMessages = await channel.messages.fetch(options);
-    console.log(`Fetched ${fetchedMessages.size} messages`);
+    console.log(`Fetched ${fetchedMessages.size} messages.`);
 
     if (fetchedMessages.size === 0) {
       hasMoreMessages = false;
@@ -92,21 +92,21 @@ export async function fetchMessagesInRange(
       return msgDate.isBetween(startDate, endDate, null, '[)');
     });
 
-    console.log(`Filtered ${filteredMessages.size} messages in date range`);
+    console.log(`Filtered ${filteredMessages.size} messages in date range.`);
 
     messages.push(...filteredMessages.values());
     lastMessageId = fetchedMessages.last()?.id;
 
     const oldestMessageDate = dayjs(fetchedMessages.last()?.createdAt);
     if (oldestMessageDate.isBefore(startDate)) {
-      console.log('Oldest message is before start date, breaking loop');
+      console.log('Oldest message is before start date, breaking loop.');
       break;
     }
 
     iteration++;
   }
 
-  console.log(`Total messages collected: ${messages.length}`);
+  console.log(`Total messages collected: ${messages.length}.`);
   return messages;
 }
 
@@ -161,7 +161,7 @@ async function announceWinners(
   for (const [index, winnerData] of winners.entries()) {
     const { message, count } = winnerData;
     const winnerLink = message.url;
-    const line = `**#${index + 1}** - Felicitaciones, ${message.author}! Tu post ha ganado con ${count} reacciones. [Ver mensaje](${winnerLink})`;
+    const line = `**#${index + 1}** - ¡Felicitaciones, ${message.author}! Tu post ha ganado con ${count} reacciones! [Ver mensaje](${winnerLink})`;
     messageContent += line + '\n';
 
     const attachment = message.attachments.first();
@@ -191,7 +191,7 @@ export async function announceYearWinners(
   const winners = await getTopMessages(messages, LAUGH_EMOJIS);
 
   if (winners.length === 0) {
-    await interaction.editReply('No se encontraron memes para el año 2024 😢');
+    await interaction.editReply('No se encontraron memes para el año 2024 😢.');
     return;
   }
 
@@ -201,11 +201,11 @@ export async function announceYearWinners(
     const { message, count } = winnerData;
     const medal = index === 0 ? '👑' : index === 1 ? '🥈' : '🥉';
     const winnerLink = message.url;
-    const line = `${medal} **${index + 1}° Lugar** - ¡Felicitaciones ${message.author}! Tu meme alcanzó ${count} reacciones\n${winnerLink}\n`;
+    const line = `${medal} **${index + 1}° Lugar** - ¡Felicitaciones ${message.author}! Tu meme alcanzó ${count} reacciones!\n${winnerLink}\n`;
     messageContent += line + '\n';
   }
 
-  messageContent += '¡Gracias a todos por otro año lleno de risas! 🎉';
+  messageContent += '¡Gracias a todos por otro año lleno de risas! 🎉.';
 
   const messageOptions: any = { content: messageContent };
   await interaction.editReply(messageOptions);

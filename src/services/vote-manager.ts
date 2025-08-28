@@ -32,7 +32,7 @@ export class VoteManager {
       // Schedule cleanup after 30 seconds to allow for final message updates
       setTimeout(() => {
         this.removeVote(voteId);
-        console.log(`Cleaned up completed vote: ${voteId}`);
+        console.log(`Cleaned up completed vote: ${voteId}.`);
       }, 30000);
     }
   }

@@ -27,27 +27,27 @@ if (!guildId) {
 const commands = [
     new SlashCommandBuilder()
         .setName('gettop')
-        .setDescription('Anuncia el ganador scrapeando los mensajes con más reacciones'),
+        .setDescription('Anuncia el ganador scrapeando los mensajes con más reacciones.'),
     new SlashCommandBuilder()
         .setName('memeoftheyear')
-        .setDescription('Get the most reacted meme of the year 2024 (Jan 1st - Dec 31st)'),
+        .setDescription('Get the most reacted meme of the year 2024 (Jan 1st - Dec 31st).'),
     new SlashCommandBuilder()
         .setName('vote-timeout')
-        .setDescription('Inicia una votación para aplicar timeout a un usuario')
+        .setDescription('Inicia una votación para aplicar timeout a un usuario.')
         .addUserOption(option =>
             option.setName('user')
-                .setDescription('Usuario que recibirá el timeout')
+                .setDescription('Usuario que recibirá el timeout.')
                 .setRequired(true))
         .addStringOption(option =>
             option.setName('reason')
-                .setDescription('Razón del timeout')
+                .setDescription('Razón del timeout.')
                 .setRequired(true)),
     new SlashCommandBuilder()
         .setName('cancel-vote')
-        .setDescription('Cancela una votación activa (solo admins)')
+        .setDescription('Cancela una votación activa (solo admins).')
         .addStringOption(option =>
             option.setName('vote-id')
-                .setDescription('ID de la votación a cancelar')
+                .setDescription('ID de la votación a cancelar.')
                 .setRequired(true)),
 ].map(command => command.toJSON());
 
