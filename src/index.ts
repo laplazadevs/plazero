@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import isBetween from 'dayjs/plugin/isBetween';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
-import { BaseMessageOptions, Client, CommandInteraction, Events, GatewayIntentBits, Message, TextChannel } from 'discord.js';
+import { BaseMessageOptions, Client, CommandInteraction, ChatInputCommandInteraction, Events, GatewayIntentBits, Message, TextChannel, EmbedBuilder, User, GuildMember, PermissionFlagsBits } from 'discord.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -37,6 +37,39 @@ const BONE_EMOJI = ['🦴'];
 
 const SCRAP_MESSAGES_COMMAND = 'gettop';
 const MEME_OF_THE_YEAR_COMMAND = 'memeoftheyear';
+const VOTE_TIMEOUT_COMMAND = 'vote-timeout';
+const CANCEL_VOTE_COMMAND = 'cancel-vote';
+
+// Voting system configuration
+const VOTE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+const COOLDOWN_DURATION_MS = 60 * 60 * 1000; // 1 hour
+const REQUIRED_ROLE_NAME = 'One Of Us';
+const MODERACION_CHANNEL_NAME = 'moderacion';
+
+// Vote thresholds and corresponding timeout durations
+const VOTE_THRESHOLDS = [
+  { votes: 3, duration: 5 * 60 * 1000, label: 'Light Warning (5 min)' },
+  { votes: 5, duration: 30 * 60 * 1000, label: 'Moderate Sanction (30 min)' },
+  { votes: 8, duration: 2 * 60 * 60 * 1000, label: 'Serious Violation (2 hours)' },
+  { votes: 12, duration: 24 * 60 * 60 * 1000, label: 'Severe Misconduct (24 hours)' }
+];
+
+// In-memory storage for active votes and cooldowns
+interface VoteData {
+  id: string;
+  targetUser: User;
+  initiator: User;
+  reason: string;
+  startTime: Date;
+  upVotes: Set<string>;
+  downVotes: Set<string>;
+  messageId: string;
+  channelId: string;
+  completed: boolean;
+}
+
+const activeVotes = new Map<string, VoteData>();
+const userCooldowns = new Map<string, Date>();
 
 // Discord Bot Login
 client
@@ -77,7 +110,7 @@ client.once('ready', () => {
           },
           isCommand: () => true,
           commandName: SCRAP_MESSAGES_COMMAND,
-        } as unknown as CommandInteraction;
+        } as unknown as ChatInputCommandInteraction;
 
         await processMessages(fakeInteraction);
       } catch (error) {
@@ -93,7 +126,7 @@ client.once('ready', () => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isCommand()) return;
+  if (!interaction.isChatInputCommand()) return;
 
   try {
     if (interaction.commandName === SCRAP_MESSAGES_COMMAND) {
@@ -109,6 +142,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const winners = await getTopMessages(messages, LAUGH_EMOJIS);
       
       await announceYearWinners(interaction, winners);
+    } else if (interaction.commandName === VOTE_TIMEOUT_COMMAND) {
+      await handleVoteTimeoutCommand(interaction);
+    } else if (interaction.commandName === CANCEL_VOTE_COMMAND) {
+      await handleCancelVoteCommand(interaction);
     }
   } catch (error) {
     console.error('Error processing command:', error);
@@ -122,7 +159,44 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-async function processMessages(interaction: CommandInteraction): Promise<void> {
+// Handle reactions for voting
+client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  if (user.bot) return;
+  
+  const message = reaction.message;
+  const activeVote = Array.from(activeVotes.values()).find(vote => vote.messageId === message.id);
+  
+  if (!activeVote || activeVote.completed) return;
+  
+  if (reaction.emoji.name === '👍') {
+    activeVote.upVotes.add(user.id);
+    activeVote.downVotes.delete(user.id);
+  } else if (reaction.emoji.name === '👎') {
+    activeVote.downVotes.add(user.id);
+    activeVote.upVotes.delete(user.id);
+  }
+  
+  await updateVoteMessage(activeVote);
+});
+
+client.on(Events.MessageReactionRemove, async (reaction, user) => {
+  if (user.bot) return;
+  
+  const message = reaction.message;
+  const activeVote = Array.from(activeVotes.values()).find(vote => vote.messageId === message.id);
+  
+  if (!activeVote || activeVote.completed) return;
+  
+  if (reaction.emoji.name === '👍') {
+    activeVote.upVotes.delete(user.id);
+  } else if (reaction.emoji.name === '👎') {
+    activeVote.downVotes.delete(user.id);
+  }
+  
+  await updateVoteMessage(activeVote);
+});
+
+async function processMessages(interaction: ChatInputCommandInteraction): Promise<void> {
   const channelId = process.env.MEME_CHANNEL_ID;
 
   if (!channelId) {
@@ -249,7 +323,7 @@ async function getTopMessages(
 }
 
 async function announceWinners(
-  interaction: CommandInteraction,
+  interaction: ChatInputCommandInteraction,
   winners: { message: Message; count: number }[],
   contestType: string
 ): Promise<void> {
@@ -285,7 +359,7 @@ async function announceWinners(
 }
 
 async function announceYearWinners(
-  interaction: CommandInteraction,
+  interaction: ChatInputCommandInteraction,
   winners: { message: Message; count: number }[]
 ): Promise<void> {
   if (winners.length === 0) {
@@ -307,4 +381,310 @@ async function announceYearWinners(
 
   const messageOptions: BaseMessageOptions = { content: messageContent };
   await interaction.followUp(messageOptions);
+}
+
+// Voting system functions
+async function handleVoteTimeoutCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  const targetUser = interaction.options.getUser('user', true);
+  const reason = interaction.options.getString('reason', true);
+  const initiator = interaction.user;
+  
+  // Check if initiator has required role
+  const member = interaction.member as GuildMember;
+  if (!member.roles.cache.some(role => role.name === REQUIRED_ROLE_NAME)) {
+    await interaction.reply({ content: `❌ Solo usuarios con el rol "${REQUIRED_ROLE_NAME}" pueden iniciar votaciones.`, ephemeral: true });
+    return;
+  }
+  
+  // Check if target is admin (protect admins)
+  const targetMember = await interaction.guild?.members.fetch(targetUser.id);
+  if (targetMember?.permissions.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: '❌ No puedes iniciar una votación contra un administrador.', ephemeral: true });
+    return;
+  }
+  
+  // Check cooldown
+  const now = new Date();
+  const lastVoteTime = userCooldowns.get(initiator.id);
+  if (lastVoteTime && (now.getTime() - lastVoteTime.getTime()) < COOLDOWN_DURATION_MS) {
+    const remainingTime = Math.ceil((COOLDOWN_DURATION_MS - (now.getTime() - lastVoteTime.getTime())) / 60000);
+    await interaction.reply({ content: `❌ Debes esperar ${remainingTime} minutos antes de iniciar otra votación.`, ephemeral: true });
+    return;
+  }
+  
+  // Check if there's already an active vote for this user
+  const existingVote = Array.from(activeVotes.values()).find(vote => 
+    vote.targetUser.id === targetUser.id && !vote.completed
+  );
+  if (existingVote) {
+    await interaction.reply({ content: '❌ Ya hay una votación activa para este usuario.', ephemeral: true });
+    return;
+  }
+  
+  // Get moderation channel
+  const moderacionChannel = interaction.guild?.channels.cache.find(
+    channel => channel.name === MODERACION_CHANNEL_NAME && channel.isTextBased()
+  ) as TextChannel;
+  
+  if (!moderacionChannel) {
+    await interaction.reply({ content: `❌ No se encontró el canal #${MODERACION_CHANNEL_NAME}.`, ephemeral: true });
+    return;
+  }
+  
+  // Create vote
+  const voteId = `vote_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+  const voteData: VoteData = {
+    id: voteId,
+    targetUser,
+    initiator,
+    reason,
+    startTime: now,
+    upVotes: new Set(),
+    downVotes: new Set(),
+    messageId: '',
+    channelId: moderacionChannel.id,
+    completed: false
+  };
+  
+  // Create embed message
+  const embed = createVoteEmbed(voteData);
+  const voteMessage = await moderacionChannel.send({ embeds: [embed] });
+  
+  // Add reactions
+  await voteMessage.react('👍');
+  await voteMessage.react('👎');
+  
+  // Update vote data with message ID
+  voteData.messageId = voteMessage.id;
+  activeVotes.set(voteId, voteData);
+  
+  // Set cooldown for initiator
+  userCooldowns.set(initiator.id, now);
+  
+  // Schedule vote completion
+  setTimeout(() => completeVote(voteId), VOTE_DURATION_MS);
+  
+  // Notify target user
+  try {
+    await targetUser.send(`⚠️ Se ha iniciado una votación de timeout en tu contra en el servidor **${interaction.guild?.name}**.\n**Razón:** ${reason}\n**Iniciado por:** ${initiator.username}\n\nLa votación durará 5 minutos.`);
+  } catch {
+    // User might have DMs disabled
+  }
+  
+  await interaction.reply({ content: `✅ Votación iniciada contra ${targetUser.username} en #${MODERACION_CHANNEL_NAME}. ID: \`${voteId}\``, ephemeral: true });
+}
+
+async function handleCancelVoteCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  // Check if user is admin
+  const member = interaction.member as GuildMember;
+  if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: '❌ Solo los administradores pueden cancelar votaciones.', ephemeral: true });
+    return;
+  }
+  
+  const voteId = interaction.options.getString('vote-id', true);
+  const vote = activeVotes.get(voteId);
+  
+  if (!vote) {
+    await interaction.reply({ content: '❌ No se encontró una votación con ese ID.', ephemeral: true });
+    return;
+  }
+  
+  if (vote.completed) {
+    await interaction.reply({ content: '❌ Esta votación ya ha sido completada.', ephemeral: true });
+    return;
+  }
+  
+  // Mark as completed to prevent further processing
+  vote.completed = true;
+  
+  // Update the vote message to show cancellation
+  const channel = client.channels.cache.get(vote.channelId) as TextChannel;
+  if (channel) {
+    const message = await channel.messages.fetch(vote.messageId);
+    const cancelEmbed = new EmbedBuilder()
+      .setTitle('🛑 Votación Cancelada por Administrador')
+      .setDescription(`**Usuario:** ${vote.targetUser.username}\n**Razón:** ${vote.reason}\n**Iniciado por:** ${vote.initiator.username}\n**Cancelado por:** ${interaction.user.username}`)
+      .setColor(0x808080)
+      .setTimestamp();
+    
+    await message.edit({ embeds: [cancelEmbed] });
+  }
+  
+  // Notify target user
+  try {
+    await vote.targetUser.send(`✅ La votación de timeout en tu contra ha sido cancelada por un administrador en **${interaction.guild?.name}**.`);
+  } catch {
+    // User might have DMs disabled
+  }
+  
+  // Remove from active votes
+  activeVotes.delete(voteId);
+  
+  await interaction.reply({ content: `✅ Votación \`${voteId}\` cancelada exitosamente.`, ephemeral: true });
+}
+
+function createVoteEmbed(vote: VoteData): EmbedBuilder {
+  const upVoteCount = vote.upVotes.size;
+  const downVoteCount = vote.downVotes.size;
+  const netVotes = upVoteCount - downVoteCount;
+  
+  // Determine current threshold
+  let currentThreshold = VOTE_THRESHOLDS[0];
+  for (const threshold of VOTE_THRESHOLDS) {
+    if (netVotes >= threshold.votes) {
+      currentThreshold = threshold;
+    }
+  }
+  
+  const timeRemaining = Math.max(0, VOTE_DURATION_MS - (Date.now() - vote.startTime.getTime()));
+  const minutesRemaining = Math.ceil(timeRemaining / 60000);
+  
+  const embed = new EmbedBuilder()
+    .setTitle('⚖️ Votación de Timeout')
+    .setDescription(
+      `**Usuario:** ${vote.targetUser.username}\n` +
+      `**Razón:** ${vote.reason}\n` +
+      `**Iniciado por:** ${vote.initiator.username}\n\n` +
+      `**Votos a favor:** 👍 ${upVoteCount}\n` +
+      `**Votos en contra:** 👎 ${downVoteCount}\n` +
+      `**Votos netos:** ${netVotes}\n\n` +
+      `**Sanción actual:** ${currentThreshold.label}\n` +
+      `**Tiempo restante:** ${minutesRemaining} minuto(s)\n\n` +
+      `**ID de votación:** \`${vote.id}\``
+    )
+    .setColor(netVotes >= 3 ? 0xff4444 : 0xffaa00)
+    .setTimestamp(vote.startTime)
+    .setFooter({ text: 'Reacciona con 👍 para aprobar o 👎 para rechazar' });
+  
+  return embed;
+}
+
+async function updateVoteMessage(vote: VoteData): Promise<void> {
+  if (vote.completed) return;
+  
+  const channel = client.channels.cache.get(vote.channelId) as TextChannel;
+  if (!channel) return;
+  
+  try {
+    const message = await channel.messages.fetch(vote.messageId);
+    const embed = createVoteEmbed(vote);
+    await message.edit({ embeds: [embed] });
+  } catch (error) {
+    console.error('Error updating vote message:', error);
+  }
+}
+
+async function completeVote(voteId: string): Promise<void> {
+  const vote = activeVotes.get(voteId);
+  if (!vote || vote.completed) return;
+  
+  vote.completed = true;
+  
+  const upVoteCount = vote.upVotes.size;
+  const downVoteCount = vote.downVotes.size;
+  const netVotes = upVoteCount - downVoteCount;
+  
+  const channel = client.channels.cache.get(vote.channelId) as TextChannel;
+  if (!channel) return;
+  
+  let resultEmbed: EmbedBuilder;
+  let timeoutApplied = false;
+  let timeoutDuration = 0;
+  let timeoutLabel = '';
+  
+  if (netVotes >= 3) {
+    // Find the appropriate timeout duration
+    let selectedThreshold = VOTE_THRESHOLDS[0];
+    for (const threshold of VOTE_THRESHOLDS) {
+      if (netVotes >= threshold.votes) {
+        selectedThreshold = threshold;
+      }
+    }
+    
+    timeoutDuration = selectedThreshold.duration;
+    timeoutLabel = selectedThreshold.label;
+    
+    // Apply timeout
+    try {
+      const guild = channel.guild;
+      const targetMember = await guild.members.fetch(vote.targetUser.id);
+      await targetMember.timeout(timeoutDuration, `Votación comunitaria: ${vote.reason}`);
+      timeoutApplied = true;
+      
+      resultEmbed = new EmbedBuilder()
+        .setTitle('✅ Timeout Aplicado')
+        .setDescription(
+          `**Usuario:** ${vote.targetUser.username}\n` +
+          `**Razón:** ${vote.reason}\n` +
+          `**Votos finales:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)\n` +
+          `**Sanción:** ${timeoutLabel}\n` +
+          `**Aplicado por:** Votación comunitaria`
+        )
+        .setColor(0x00ff00)
+        .setTimestamp();
+    } catch (error) {
+      console.error('Error applying timeout:', error);
+      resultEmbed = new EmbedBuilder()
+        .setTitle('❌ Error al Aplicar Timeout')
+        .setDescription(
+          `**Usuario:** ${vote.targetUser.username}\n` +
+          `**Razón:** ${vote.reason}\n` +
+          `**Votos finales:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)\n` +
+          `**Error:** No se pudo aplicar el timeout`
+        )
+        .setColor(0xff0000)
+        .setTimestamp();
+    }
+  } else {
+    resultEmbed = new EmbedBuilder()
+      .setTitle('❌ Votación Rechazada')
+      .setDescription(
+        `**Usuario:** ${vote.targetUser.username}\n` +
+        `**Razón:** ${vote.reason}\n` +
+        `**Votos finales:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)\n` +
+        `**Resultado:** No se alcanzaron los votos necesarios (mínimo 3)`
+      )
+      .setColor(0x808080)
+      .setTimestamp();
+  }
+  
+  // Update the vote message
+  try {
+    const message = await channel.messages.fetch(vote.messageId);
+    await message.edit({ embeds: [resultEmbed] });
+  } catch (error) {
+    console.error('Error updating final vote message:', error);
+  }
+  
+  // Notify target user
+  try {
+    if (timeoutApplied) {
+      const timeoutMinutes = Math.floor(timeoutDuration / 60000);
+      const timeoutHours = Math.floor(timeoutMinutes / 60);
+      let durationText = '';
+      
+      if (timeoutHours > 0) {
+        durationText = `${timeoutHours} hora(s)`;
+      } else {
+        durationText = `${timeoutMinutes} minuto(s)`;
+      }
+      
+      await vote.targetUser.send(
+        `⚠️ Se te ha aplicado un timeout de **${durationText}** en **${channel.guild.name}**.\n` +
+        `**Razón:** ${vote.reason}\n` +
+        `**Votos:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)`
+      );
+    } else {
+      await vote.targetUser.send(
+        `✅ La votación de timeout en tu contra ha sido rechazada en **${channel.guild.name}**.\n` +
+        `**Votos:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)`
+      );
+    }
+  } catch {
+    // User might have DMs disabled
+  }
+  
+  // Remove from active votes
+  activeVotes.delete(voteId);
 }
