@@ -42,16 +42,17 @@ const CANCEL_VOTE_COMMAND = 'cancel-vote';
 
 // Voting system configuration
 const VOTE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
-const COOLDOWN_DURATION_MS = 60 * 60 * 1000; // 1 hour
+const COOLDOWN_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 const REQUIRED_ROLE_NAME = 'One Of Us';
+const SERVER_BOOSTER_ROLE_NAME = 'Server Booster';
 const MODERACION_CHANNEL_NAME = '🧑‍⚖️︱moderación';
 
 // Vote thresholds and corresponding timeout durations
 const VOTE_THRESHOLDS = [
-  { votes: 3, duration: 5 * 60 * 1000, label: 'Light Warning (5 min)' },
-  { votes: 5, duration: 30 * 60 * 1000, label: 'Moderate Sanction (30 min)' },
-  { votes: 8, duration: 2 * 60 * 60 * 1000, label: 'Serious Violation (2 hours)' },
-  { votes: 12, duration: 24 * 60 * 60 * 1000, label: 'Severe Misconduct (24 hours)' }
+  { votes: 5, duration: 5 * 60 * 1000, label: 'Light Warning (5 min)' },
+  { votes: 8, duration: 30 * 60 * 1000, label: 'Moderate Sanction (30 min)' },
+  { votes: 12, duration: 2 * 60 * 60 * 1000, label: 'Serious Violation (2 hours)' },
+  { votes: 15, duration: 24 * 60 * 60 * 1000, label: 'Severe Misconduct (24 hours)' }
 ];
 
 // In-memory storage for active votes and cooldowns
@@ -61,8 +62,8 @@ interface VoteData {
   initiator: User;
   reason: string;
   startTime: Date;
-  upVotes: Set<string>;
-  downVotes: Set<string>;
+  upVotes: Map<string, number>; // userId -> vote weight (1 for normal, 2 for boosters)
+  downVotes: Map<string, number>; // userId -> vote weight (1 for normal, 2 for boosters)
   messageId: string;
   channelId: string;
   completed: boolean;
@@ -70,6 +71,18 @@ interface VoteData {
 
 const activeVotes = new Map<string, VoteData>();
 const userCooldowns = new Map<string, Date>();
+
+// Helper function to get vote weight based on user roles
+async function getVoteWeight(guild: any, userId: string): Promise<number> {
+  try {
+    const member = await guild.members.fetch(userId);
+    const isBooster = member.roles.cache.some((role: any) => role.name === SERVER_BOOSTER_ROLE_NAME);
+    return isBooster ? 2 : 1;
+  } catch (error) {
+    console.error('Error fetching member for vote weight:', error);
+    return 1; // Default to 1 if error
+  }
+}
 
 // Discord Bot Login
 client
@@ -168,12 +181,48 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
   
   if (!activeVote || activeVote.completed) return;
   
-  if (reaction.emoji.name === '👍') {
-    activeVote.upVotes.add(user.id);
+  const emojiName = reaction.emoji.name;
+  
+  if (emojiName === '👍') {
+    const weight = await getVoteWeight(message.guild, user.id);
+    activeVote.upVotes.set(user.id, weight);
     activeVote.downVotes.delete(user.id);
-  } else if (reaction.emoji.name === '👎') {
-    activeVote.downVotes.add(user.id);
+  } else if (emojiName === '👎') {
+    const weight = await getVoteWeight(message.guild, user.id);
+    activeVote.downVotes.set(user.id, weight);
     activeVote.upVotes.delete(user.id);
+  } else if (emojiName === '⬜') {
+    // Punish "tibio" vote with 1-minute timeout
+    try {
+      const guild = message.guild;
+      if (guild) {
+        const member = await guild.members.fetch(user.id);
+        
+        // Don't timeout admins
+        if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
+          await member.timeout(60000, 'Votó como tibio'); // 1 minute timeout
+          
+          // Send punishment message to moderation channel
+          const moderacionChannel = guild.channels.cache.find(
+            channel => channel.name === MODERACION_CHANNEL_NAME && channel.isTextBased()
+          ) as TextChannel;
+          
+          if (moderacionChannel) {
+            await moderacionChannel.send(`${user} recibió un timeout por votar como tibio`);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error applying tibio timeout:', error);
+    }
+    
+    // Remove the tibio reaction
+    await reaction.users.remove(user.id);
+    return;
+  } else {
+    // Remove any other emojis that aren't allowed
+    await reaction.users.remove(user.id);
+    return;
   }
   
   await updateVoteMessage(activeVote);
@@ -187,11 +236,14 @@ client.on(Events.MessageReactionRemove, async (reaction, user) => {
   
   if (!activeVote || activeVote.completed) return;
   
-  if (reaction.emoji.name === '👍') {
+  const emojiName = reaction.emoji.name;
+  
+  if (emojiName === '👍') {
     activeVote.upVotes.delete(user.id);
-  } else if (reaction.emoji.name === '👎') {
+  } else if (emojiName === '👎') {
     activeVote.downVotes.delete(user.id);
   }
+  // Note: ⬜ reactions are already removed automatically, so no need to handle removal
   
   await updateVoteMessage(activeVote);
 });
@@ -439,8 +491,8 @@ async function handleVoteTimeoutCommand(interaction: ChatInputCommandInteraction
     initiator,
     reason,
     startTime: now,
-    upVotes: new Set(),
-    downVotes: new Set(),
+    upVotes: new Map(),
+    downVotes: new Map(),
     messageId: '',
     channelId: moderacionChannel.id,
     completed: false
@@ -453,6 +505,7 @@ async function handleVoteTimeoutCommand(interaction: ChatInputCommandInteraction
   // Add reactions
   await voteMessage.react('👍');
   await voteMessage.react('👎');
+  await voteMessage.react('⬜');
   
   // Update vote data with message ID
   voteData.messageId = voteMessage.id;
@@ -525,8 +578,8 @@ async function handleCancelVoteCommand(interaction: ChatInputCommandInteraction)
 }
 
 function createVoteEmbed(vote: VoteData): EmbedBuilder {
-  const upVoteCount = vote.upVotes.size;
-  const downVoteCount = vote.downVotes.size;
+  const upVoteCount = Array.from(vote.upVotes.values()).reduce((sum, weight) => sum + weight, 0);
+  const downVoteCount = Array.from(vote.downVotes.values()).reduce((sum, weight) => sum + weight, 0);
   const netVotes = upVoteCount - downVoteCount;
   
   // Determine current threshold
@@ -553,9 +606,9 @@ function createVoteEmbed(vote: VoteData): EmbedBuilder {
       `**Tiempo restante:** ${minutesRemaining} minuto(s)\n\n` +
       `**ID de votación:** \`${vote.id}\``
     )
-    .setColor(netVotes >= 3 ? 0xff4444 : 0xffaa00)
+    .setColor(netVotes >= 5 ? 0xff4444 : 0xffaa00)
     .setTimestamp(vote.startTime)
-    .setFooter({ text: 'Reacciona con 👍 para aprobar o 👎 para rechazar' });
+    .setFooter({ text: 'Reacciona con 👍 para aprobar, 👎 para rechazar, o ⬜ para ser tibio (y recibir 1 min de timeout)' });
   
   return embed;
 }
@@ -581,8 +634,8 @@ async function completeVote(voteId: string): Promise<void> {
   
   vote.completed = true;
   
-  const upVoteCount = vote.upVotes.size;
-  const downVoteCount = vote.downVotes.size;
+  const upVoteCount = Array.from(vote.upVotes.values()).reduce((sum, weight) => sum + weight, 0);
+  const downVoteCount = Array.from(vote.downVotes.values()).reduce((sum, weight) => sum + weight, 0);
   const netVotes = upVoteCount - downVoteCount;
   
   const channel = client.channels.cache.get(vote.channelId) as TextChannel;
@@ -593,7 +646,7 @@ async function completeVote(voteId: string): Promise<void> {
   let timeoutDuration = 0;
   let timeoutLabel = '';
   
-  if (netVotes >= 3) {
+  if (netVotes >= 5) {
     // Find the appropriate timeout duration
     let selectedThreshold = VOTE_THRESHOLDS[0];
     for (const threshold of VOTE_THRESHOLDS) {
@@ -643,7 +696,7 @@ async function completeVote(voteId: string): Promise<void> {
         `**Usuario:** ${vote.targetUser.username}\n` +
         `**Razón:** ${vote.reason}\n` +
         `**Votos finales:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)\n` +
-        `**Resultado:** No se alcanzaron los votos necesarios (mínimo 3)`
+        `**Resultado:** No se alcanzaron los votos necesarios (mínimo 5)`
       )
       .setColor(0x808080)
       .setTimestamp();
