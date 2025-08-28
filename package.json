@@ -1,11 +1,12 @@
 {
     "name": "plazero",
     "version": "1.0.0",
-    "main": "index.js",
+    "type": "module",
+    "main": "dist/index.js",
     "license": "MIT",
-    "exports": [
-        "./dist/index.js"
-    ],
+    "exports": {
+        ".": "./dist/index.js"
+    },
     "scripts": {
         "lint": "eslint . --cache --ext .js,.jsx,.ts,.tsx",
         "lint:fix": "eslint . --fix --cache --ext .js,.jsx,.ts,.tsx",
@@ -14,8 +15,12 @@
         "clean": "git clean -xdf --exclude=\"/config/**/*\"",
         "clean:dry": "git clean -xdf --exclude=\"/config/**/*\" --dry-run",
         "build": "tsc --project tsconfig.json",
-        "start": "npx ts-node src/register-commands.ts && npm run start:bot",
-        "start:bot": "npm run build && node --enable-source-maps dist/index.js"
+        "register-commands": "node dist/register-commands.js",
+        "start": "npm run build && npm run register-commands && npm run start:bot",
+        "start:bot": "node --enable-source-maps dist/index.js",
+        "start:production": "npm run build && npm run register-commands && npm run start:bot",
+        "dev": "npx ts-node --esm src/register-commands.ts && npx ts-node --esm src/index.ts",
+        "dev:register": "npx ts-node --esm src/register-commands.ts"
     },
     "devDependencies": {
         "@typescript-eslint/eslint-plugin": "^5.58.0",

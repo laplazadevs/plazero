@@ -3,7 +3,7 @@ import { REST } from '@discordjs/rest';
 import { Routes } from 'discord-api-types/v9';
 import * as dotenv from 'dotenv';
 
-dotenv.config({ path: '../.env' });
+dotenv.config();
 
 const token = process.env.DISCORD_BOT_TOKEN;
 const clientId = process.env.CLIENT_ID;

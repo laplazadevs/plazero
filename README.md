@@ -87,10 +87,34 @@ MEME_CHANNEL_ID=your_meme_channel_id
    - Copy `.env.example` to `.env` (if available)
    - Fill in your Discord bot credentials and channel IDs
 
-4. **Register slash commands**
+4. **Register slash commands and start the bot**
    ```bash
    npm run start
    ```
+
+### Deployment
+
+For production deployment:
+
+1. **Ensure environment variables are set**
+   ```env
+   DISCORD_BOT_TOKEN=your_bot_token
+   CLIENT_ID=your_bot_client_id
+   GUILD_ID=your_server_id
+   MEME_CHANNEL_ID=your_meme_channel_id
+   ```
+
+2. **Deploy using production script**
+   ```bash
+   npm run start
+   ```
+
+**Note**: The bot uses ES modules and requires the compiled JavaScript files in the `dist/` directory. The `start` script automatically builds the project, registers commands, and starts the bot.
+
+#### ES Module Requirements
+- All imports must include `.js` extensions for ES modules
+- dayjs plugins require explicit `.js` extensions
+- Node.js v16+ recommended for full ES module support
 
 ### Required Discord Setup
 
@@ -171,17 +195,50 @@ The bot automatically runs the weekly competition every **Friday at 11:40 AM (Bo
 ## 🔧 Development
 
 ### Scripts
+
+#### Production
+- `npm run start` - Build, register commands, and start the bot (production)
+- `npm run start:production` - Same as start (alias for deployment)
 - `npm run build` - Compile TypeScript to JavaScript
-- `npm run start` - Register commands and start the bot
-- `npm run start:bot` - Start the bot without registering commands
+- `npm run register-commands` - Register Discord slash commands (from compiled JS)
+- `npm run start:bot` - Start the bot only (no command registration)
+
+#### Development
+- `npm run dev` - Register commands and start bot using ts-node (development)
+- `npm run dev:register` - Register commands only using ts-node (development)
+
+#### Code Quality
 - `npm run lint` - Run ESLint
 - `npm run format` - Format code with Prettier
+
+### Modular Architecture Benefits
+- **🏗️ Separation of Concerns**: Each module has a single responsibility
+- **🧪 Easy Testing**: Components can be tested independently
+- **🔧 Simple Maintenance**: Changes isolated to specific modules
+- **📈 Scalability**: Easy to add new features without breaking existing code
+- **🛡️ Memory Safety**: Automatic cleanup and proper resource management
+- **🎯 Type Safety**: Strong TypeScript interfaces throughout
 
 ### Project Structure
 ```
 src/
-├── index.ts              # Main bot logic and voting system
-└── register-commands.ts  # Slash command registration
+├── index.ts              # Main entry point and bot initialization
+├── register-commands.ts  # Slash command registration
+├── config/
+│   └── constants.ts      # Bot configuration and constants
+├── types/
+│   └── vote.ts          # TypeScript interfaces
+├── services/
+│   ├── vote-manager.ts   # Vote state management
+│   ├── vote-embed.ts     # Vote embed creation
+│   └── meme-service.ts   # Meme competition logic
+├── handlers/
+│   ├── vote-commands.ts  # Slash command handlers
+│   ├── vote-reactions.ts # Reaction event handlers
+│   ├── vote-completion.ts# Vote completion logic
+│   └── vote-updates.ts   # Real-time vote updates
+└── utils/
+    └── vote-utils.ts     # Utility functions
 ```
 
 ## 🚨 Troubleshooting
