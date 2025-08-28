@@ -164,10 +164,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     console.error('Error processing command:', error);
     const errorMessage = 'There was an error processing your command.';
     
-    if (interaction.deferred) {
-      await interaction.editReply(errorMessage);
-    } else if (!interaction.replied) {
-      await interaction.reply(errorMessage);
+    try {
+      if (interaction.deferred) {
+        await interaction.editReply(errorMessage);
+      } else if (!interaction.replied) {
+        await interaction.reply({ content: errorMessage, ephemeral: true });
+      }
+    } catch (replyError) {
+      // If we can't even send an error message, just log it
+      console.error('Could not send error reply:', replyError);
     }
   }
 });
@@ -177,55 +182,104 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (user.bot) return;
   
   const message = reaction.message;
-  const activeVote = Array.from(activeVotes.values()).find(vote => vote.messageId === message.id);
-  
-  if (!activeVote || activeVote.completed) return;
-  
   const emojiName = reaction.emoji.name;
   
-  if (emojiName === '👍') {
-    const weight = await getVoteWeight(message.guild, user.id);
-    activeVote.upVotes.set(user.id, weight);
-    activeVote.downVotes.delete(user.id);
-  } else if (emojiName === '👎') {
-    const weight = await getVoteWeight(message.guild, user.id);
-    activeVote.downVotes.set(user.id, weight);
-    activeVote.upVotes.delete(user.id);
-  } else if (emojiName === '⬜') {
-    // Punish "tibio" vote with 1-minute timeout
-    try {
-      const guild = message.guild;
-      if (guild) {
-        const member = await guild.members.fetch(user.id);
-        
-        // Don't timeout admins
-        if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
-          await member.timeout(60000, 'Votó como tibio'); // 1 minute timeout
-          
-          // Send punishment message to moderation channel
-          const moderacionChannel = guild.channels.cache.find(
-            channel => channel.name === MODERACION_CHANNEL_NAME && channel.isTextBased()
-          ) as TextChannel;
-          
-          if (moderacionChannel) {
-            await moderacionChannel.send(`${user} recibió un timeout por votar como tibio`);
-          }
+  // Check if this is a vote message (either active or completed)
+  const vote = Array.from(activeVotes.values()).find(vote => vote.messageId === message.id);
+  const isVoteMessage = vote !== undefined;
+  
+  // Also check if message is in moderation channel and has vote-like embeds (for completed votes)
+  let isModChannelVoteMessage = false;
+  if (!isVoteMessage && message.guild) {
+    const channel = message.channel as TextChannel;
+    if (channel.name === MODERACION_CHANNEL_NAME) {
+      // Check if message has embeds that look like vote messages
+      if (message.embeds && message.embeds.length > 0) {
+        const embed = message.embeds[0];
+        if (embed.title && (
+          embed.title.includes('Votación') || 
+          embed.title.includes('Timeout') ||
+          embed.title.includes('Cancelada') ||
+          embed.title.includes('Rechazada') ||
+          embed.title.includes('Aplicado')
+        )) {
+          isModChannelVoteMessage = true;
         }
       }
-    } catch (error) {
-      console.error('Error applying tibio timeout:', error);
     }
-    
-    // Remove the tibio reaction
-    await reaction.users.remove(user.id);
-    return;
-  } else {
-    // Remove any other emojis that aren't allowed
-    await reaction.users.remove(user.id);
-    return;
   }
   
-  await updateVoteMessage(activeVote);
+  // If this is any type of vote message, manage the reactions
+  if (isVoteMessage || isModChannelVoteMessage) {
+    // Only allow the three voting emojis
+    if (emojiName !== '👍' && emojiName !== '👎' && emojiName !== '⬜') {
+      // Remove any other emojis that aren't allowed
+      try {
+        await reaction.users.remove(user.id);
+      } catch (error) {
+        console.error('Error removing invalid reaction:', error);
+      }
+      return;
+    }
+    
+    // Handle ⬜ (tibio) punishment for any vote message
+    if (emojiName === '⬜') {
+      try {
+        const guild = message.guild;
+        if (guild) {
+          const member = await guild.members.fetch(user.id);
+          
+          // Don't timeout admins
+          if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
+            await member.timeout(60000, 'Votó como tibio'); // 1 minute timeout
+            
+            // Send punishment message to moderation channel
+            const moderacionChannel = guild.channels.cache.find(
+              channel => channel.name === MODERACION_CHANNEL_NAME && channel.isTextBased()
+            ) as TextChannel;
+            
+            if (moderacionChannel) {
+              await moderacionChannel.send(`${user} recibió un timeout por votar como tibio`);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error applying tibio timeout:', error);
+      }
+      
+      // Always remove the tibio reaction
+      try {
+        await reaction.users.remove(user.id);
+      } catch (error) {
+        console.error('Error removing tibio reaction:', error);
+      }
+      return;
+    }
+    
+    // If vote is not active or completed, don't count the vote
+    if (!vote || vote.completed) {
+      // For completed/non-active votes, remove the reaction to prevent confusion
+      try {
+        await reaction.users.remove(user.id);
+      } catch (error) {
+        console.error('Error removing reaction from completed vote:', error);
+      }
+      return;
+    }
+    
+    // Process active vote reactions
+    if (emojiName === '👍') {
+      const weight = await getVoteWeight(message.guild, user.id);
+      vote.upVotes.set(user.id, weight);
+      vote.downVotes.delete(user.id);
+    } else if (emojiName === '👎') {
+      const weight = await getVoteWeight(message.guild, user.id);
+      vote.downVotes.set(user.id, weight);
+      vote.upVotes.delete(user.id);
+    }
+    
+    await updateVoteMessage(vote);
+  }
 });
 
 client.on(Events.MessageReactionRemove, async (reaction, user) => {
@@ -234,21 +288,27 @@ client.on(Events.MessageReactionRemove, async (reaction, user) => {
   const message = reaction.message;
   const activeVote = Array.from(activeVotes.values()).find(vote => vote.messageId === message.id);
   
+  // Only process removal for active votes
   if (!activeVote || activeVote.completed) return;
   
   const emojiName = reaction.emoji.name;
   
   if (emojiName === '👍') {
     activeVote.upVotes.delete(user.id);
+    await updateVoteMessage(activeVote);
   } else if (emojiName === '👎') {
     activeVote.downVotes.delete(user.id);
+    await updateVoteMessage(activeVote);
   }
   // Note: ⬜ reactions are already removed automatically, so no need to handle removal
-  
-  await updateVoteMessage(activeVote);
 });
 
 async function processMessages(interaction: ChatInputCommandInteraction): Promise<void> {
+  // Defer if not already deferred (for scheduled runs, it won't be a real interaction)
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferReply();
+  }
+  
   const channelId = process.env.MEME_CHANNEL_ID;
 
   if (!channelId) {
@@ -437,6 +497,9 @@ async function announceYearWinners(
 
 // Voting system functions
 async function handleVoteTimeoutCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  // Defer the reply immediately to avoid timeout
+  await interaction.deferReply({ ephemeral: true });
+  
   const targetUser = interaction.options.getUser('user', true);
   const reason = interaction.options.getString('reason', true);
   const initiator = interaction.user;
@@ -444,14 +507,14 @@ async function handleVoteTimeoutCommand(interaction: ChatInputCommandInteraction
   // Check if initiator has required role
   const member = interaction.member as GuildMember;
   if (!member.roles.cache.some(role => role.name === REQUIRED_ROLE_NAME)) {
-    await interaction.reply({ content: `❌ Solo usuarios con el rol "${REQUIRED_ROLE_NAME}" pueden iniciar votaciones.`, ephemeral: true });
+    await interaction.editReply({ content: `❌ Solo usuarios con el rol "${REQUIRED_ROLE_NAME}" pueden iniciar votaciones.` });
     return;
   }
   
   // Check if target is admin (protect admins)
   const targetMember = await interaction.guild?.members.fetch(targetUser.id);
   if (targetMember?.permissions.has(PermissionFlagsBits.Administrator)) {
-    await interaction.reply({ content: '❌ No puedes iniciar una votación contra un administrador.', ephemeral: true });
+    await interaction.editReply({ content: '❌ No puedes iniciar una votación contra un administrador.' });
     return;
   }
   
@@ -460,7 +523,7 @@ async function handleVoteTimeoutCommand(interaction: ChatInputCommandInteraction
   const lastVoteTime = userCooldowns.get(initiator.id);
   if (lastVoteTime && (now.getTime() - lastVoteTime.getTime()) < COOLDOWN_DURATION_MS) {
     const remainingTime = Math.ceil((COOLDOWN_DURATION_MS - (now.getTime() - lastVoteTime.getTime())) / 60000);
-    await interaction.reply({ content: `❌ Debes esperar ${remainingTime} minutos antes de iniciar otra votación.`, ephemeral: true });
+    await interaction.editReply({ content: `❌ Debes esperar ${remainingTime} minutos antes de iniciar otra votación.` });
     return;
   }
   
@@ -469,7 +532,7 @@ async function handleVoteTimeoutCommand(interaction: ChatInputCommandInteraction
     vote.targetUser.id === targetUser.id && !vote.completed
   );
   if (existingVote) {
-    await interaction.reply({ content: '❌ Ya hay una votación activa para este usuario.', ephemeral: true });
+    await interaction.editReply({ content: '❌ Ya hay una votación activa para este usuario.' });
     return;
   }
   
@@ -479,7 +542,7 @@ async function handleVoteTimeoutCommand(interaction: ChatInputCommandInteraction
   ) as TextChannel;
   
   if (!moderacionChannel) {
-    await interaction.reply({ content: `❌ No se encontró el canal #${MODERACION_CHANNEL_NAME}.`, ephemeral: true });
+    await interaction.editReply({ content: `❌ No se encontró el canal #${MODERACION_CHANNEL_NAME}.` });
     return;
   }
   
@@ -524,14 +587,17 @@ async function handleVoteTimeoutCommand(interaction: ChatInputCommandInteraction
     // User might have DMs disabled
   }
   
-  await interaction.reply({ content: `✅ Votación iniciada contra ${targetUser.username} en #${MODERACION_CHANNEL_NAME}. ID: \`${voteId}\``, ephemeral: true });
+  await interaction.editReply({ content: `✅ Votación iniciada contra ${targetUser.username} en #${MODERACION_CHANNEL_NAME}. ID: \`${voteId}\`` });
 }
 
 async function handleCancelVoteCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  // Defer the reply immediately to avoid timeout
+  await interaction.deferReply({ ephemeral: true });
+  
   // Check if user is admin
   const member = interaction.member as GuildMember;
   if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
-    await interaction.reply({ content: '❌ Solo los administradores pueden cancelar votaciones.', ephemeral: true });
+    await interaction.editReply({ content: '❌ Solo los administradores pueden cancelar votaciones.' });
     return;
   }
   
@@ -539,12 +605,12 @@ async function handleCancelVoteCommand(interaction: ChatInputCommandInteraction)
   const vote = activeVotes.get(voteId);
   
   if (!vote) {
-    await interaction.reply({ content: '❌ No se encontró una votación con ese ID.', ephemeral: true });
+    await interaction.editReply({ content: '❌ No se encontró una votación con ese ID.' });
     return;
   }
   
   if (vote.completed) {
-    await interaction.reply({ content: '❌ Esta votación ya ha sido completada.', ephemeral: true });
+    await interaction.editReply({ content: '❌ Esta votación ya ha sido completada.' });
     return;
   }
   
@@ -574,7 +640,7 @@ async function handleCancelVoteCommand(interaction: ChatInputCommandInteraction)
   // Remove from active votes
   activeVotes.delete(voteId);
   
-  await interaction.reply({ content: `✅ Votación \`${voteId}\` cancelada exitosamente.`, ephemeral: true });
+  await interaction.editReply({ content: `✅ Votación \`${voteId}\` cancelada exitosamente.` });
 }
 
 function createVoteEmbed(vote: VoteData): EmbedBuilder {
