@@ -44,7 +44,7 @@ const CANCEL_VOTE_COMMAND = 'cancel-vote';
 const VOTE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 const COOLDOWN_DURATION_MS = 60 * 60 * 1000; // 1 hour
 const REQUIRED_ROLE_NAME = 'One Of Us';
-const MODERACION_CHANNEL_NAME = 'moderacion';
+const MODERACION_CHANNEL_NAME = '🧑‍⚖️︱moderación';
 
 // Vote thresholds and corresponding timeout durations
 const VOTE_THRESHOLDS = [
