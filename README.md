@@ -36,15 +36,15 @@ A Discord bot designed for meme communities that automatically tracks meme compe
 ### Vote Thresholds & Sanctions
 | Net Votes | Timeout Duration | Severity Level |
 |-----------|------------------|----------------|
-| 3+ votes  | 5 minutes       | Light Warning  |
-| 5+ votes  | 30 minutes      | Moderate Sanction |
-| 8+ votes  | 2 hours         | Serious Violation |
-| 12+ votes | 24 hours        | Severe Misconduct |
+| 5+ votes  | 5 minutes       | Light Warning  |
+| 8+ votes  | 30 minutes      | Moderate Sanction |
+| 12+ votes | 2 hours         | Serious Violation |
+| 15+ votes | 24 hours        | Severe Misconduct |
 
 ### Protection Mechanisms
 - **Role Requirement**: Only "One Of Us" role members can initiate votes
 - **Admin Protection**: Cannot vote against administrators
-- **Cooldown System**: 1-hour cooldown between votes per user
+- **Cooldown System**: 15-minute cooldown between votes per user
 - **Duplicate Prevention**: One active vote per target user maximum
 - **Admin Override**: Administrators can cancel any vote at any time
 
@@ -100,16 +100,38 @@ MEME_CHANNEL_ID=your_meme_channel_id
 
 #### Roles
 - **"One Of Us"**: Role required to initiate timeout votes
-- **Administrator**: Protected from timeout votes, can cancel any vote
+- **"Server Booster"**: Users with this role get double vote weight (2x instead of 1x)
+- **Administrator**: Protected from timeout votes, can cancel any vote, immune to "tibio" timeouts
 
 #### Bot Permissions
-The bot needs the following permissions:
-- `Send Messages`
-- `Add Reactions`
-- `Read Message History`
-- `Manage Messages`
-- `Timeout Members`
-- `Use Slash Commands`
+
+##### Essential Permissions
+- **`Send Messages`** - Post meme winners, voting messages, and responses
+- **`Use Slash Commands`** - Handle `/gettop`, `/memeoftheyear`, `/vote-timeout`, `/cancel-vote`
+- **`Add Reactions`** - Add 👍/👎 reactions to voting messages
+- **`Read Message History`** - Fetch messages for meme competitions
+- **`View Channels`** - Access channels to read and send messages
+- **`Embed Links`** - Send rich embed messages for voting interface
+
+##### Moderation Permissions
+- **`Timeout Members`** - Apply timeouts based on voting results ⚠️
+- **`Manage Messages`** - Edit voting messages with live updates
+
+##### Advanced Permissions
+- **`Read Messages/View Channels`** - Access message content and reactions
+- **`Use External Emojis`** - Track custom server emojis for meme competitions
+
+##### Gateway Intents Required
+The bot uses these Gateway Intents (configured automatically):
+- `Guilds` - Access server information
+- `GuildMessages` - Read and send messages
+- `MessageContent` - Access message content for competitions
+- `GuildMessageReactions` - Track reactions for voting and competitions
+
+##### Quick Setup
+**Permission Integer:** `1512880948288`
+
+⚠️ **Security Note:** The `Timeout Members` permission is sensitive - only grant to trusted bots. The bot includes admin protection to prevent misuse.
 
 ## 📈 Reaction System
 
@@ -122,7 +144,20 @@ The bot tracks these reactions for meme competitions:
 
 ### Voting Reactions
 - 👍 **Approve** - Vote to apply timeout
-- 👎 **Reject** - Vote against timeout
+- 👎 **Reject** - Vote against timeout  
+- ⬜ **Tibio (Lukewarm)** - Results in immediate 1-minute timeout for the voter
+
+### Weighted Voting System
+- **Regular Members**: Each vote counts as 1 point
+- **Server Boosters**: Each vote counts as 2 points (double weight)
+- **Vote Cleaning**: Only approved reactions (👍👎⬜) are allowed; others are automatically removed
+
+### Anti-Tibio System
+The bot punishes indecisive "lukewarm" voting:
+- **⬜ Reaction**: Immediately applies 1-minute timeout to the voter
+- **Public Shame**: Posts "{user} recibió un timeout por votar como tibio" in moderation channel
+- **Admin Immunity**: Administrators are immune to tibio timeouts
+- **Auto-Removal**: Tibio reactions are automatically removed after punishment
 
 ## 🕐 Automated Schedule
 
