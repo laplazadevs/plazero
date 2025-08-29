@@ -10,9 +10,9 @@ dayjs.extend(isBetween);
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-export async function processMessages(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function processMessages(interaction: ChatInputCommandInteraction | any): Promise<void> {
   // Defer if not already deferred (for scheduled runs, it won't be a real interaction)
-  if (!interaction.deferred && !interaction.replied) {
+  if (!interaction.deferred && !interaction.replied && interaction.deferReply) {
     await interaction.deferReply();
   }
   
@@ -56,11 +56,11 @@ export async function processMessages(interaction: ChatInputCommandInteraction):
 function getLastFridayAtNoon(): dayjs.Dayjs {
   const now = dayjs().tz('America/Bogota');
   let lastFriday = now.day(5).hour(12).minute(0).second(0).millisecond(0); // 5 represents Friday
-
-  if (now.isBefore(lastFriday)) {
-    lastFriday = lastFriday.subtract(1, 'week');
-  }
-
+  
+  // Always go back one week to get the previous Friday
+  // (we want messages from last Friday noon to this Friday noon)
+  lastFriday = lastFriday.subtract(1, 'week');
+  
   return lastFriday;
 }
 
