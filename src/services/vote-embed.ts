@@ -18,21 +18,21 @@ export function createVoteEmbed(vote: VoteData): EmbedBuilder {
   const minutesRemaining = Math.ceil(timeRemaining / 60000);
   
   const embed = new EmbedBuilder()
-    .setTitle('⚖️ Votación de Timeout')
+    .setTitle('⚖️ Votación de timeout')
     .setDescription(
-      `**Usuario:** ${vote.targetUser.username}\n` +
-      `**Razón:** ${vote.reason}\n` +
-      `**Iniciado por:** ${vote.initiator.username}\n\n` +
-      `**Votos a favor:** 👍 ${upVoteCount}\n` +
-      `**Votos en contra:** 👎 ${downVoteCount}\n` +
-      `**Votos netos:** ${netVotes}\n\n` +
-      `**Sanción actual:** ${currentThreshold.label}\n` +
-      `**Tiempo restante:** ${minutesRemaining} minuto(s)\n\n` +
-      `**ID de votación:** \`${vote.id}\``
+      `**Usuario:** ${vote.targetUser.username}.\n` +
+      `**Razón:** ${vote.reason}.\n` +
+      `**Iniciado por:** ${vote.initiator.username}.\n\n` +
+      `**Votos a favor:** 👍 ${upVoteCount}.\n` +
+      `**Votos en contra:** 👎 ${downVoteCount}.\n` +
+      `**Votos netos:** ${netVotes}.\n\n` +
+      `**Sanción actual:** ${currentThreshold.label}.\n` +
+      `**Tiempo restante:** ${minutesRemaining} minuto(s).\n\n` +
+      `**ID de votación:** \`${vote.id}\`.`
     )
     .setColor(netVotes >= 5 ? 0xff4444 : 0xffaa00)
     .setTimestamp(vote.startTime)
-    .setFooter({ text: 'Reacciona con 👍 para aprobar, 👎 para rechazar, o ⬜ para ser tibio (y recibir 1 min de timeout)' });
+    .setFooter({ text: 'Reacciona con 👍 para aprobar, 👎 para rechazar, o ⬜ para ser tibio (y recibir 1 min de timeout).' });
   
   return embed;
 }
@@ -40,12 +40,12 @@ export function createVoteEmbed(vote: VoteData): EmbedBuilder {
 export function createCompletionEmbed(vote: VoteData, netVotes: number, upVoteCount: number, downVoteCount: number, timeoutApplied: boolean, timeoutLabel?: string, error?: boolean): EmbedBuilder {
   if (error) {
     return new EmbedBuilder()
-      .setTitle('❌ Error al Aplicar Timeout')
+      .setTitle('❌ Error al aplicar timeout')
       .setDescription(
-        `**Usuario:** ${vote.targetUser.username}\n` +
-        `**Razón:** ${vote.reason}\n` +
-        `**Votos finales:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)\n` +
-        `**Error:** No se pudo aplicar el timeout`
+        `**Usuario:** ${vote.targetUser.username}.\n` +
+        `**Razón:** ${vote.reason}.\n` +
+        `**Votos finales:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos).\n` +
+        `**Error:** No se pudo aplicar el timeout.`
       )
       .setColor(0xff0000)
       .setTimestamp();
@@ -53,25 +53,25 @@ export function createCompletionEmbed(vote: VoteData, netVotes: number, upVoteCo
 
   if (timeoutApplied) {
     return new EmbedBuilder()
-      .setTitle('✅ Timeout Aplicado')
+      .setTitle('✅ Timeout aplicado')
       .setDescription(
-        `**Usuario:** ${vote.targetUser.username}\n` +
-        `**Razón:** ${vote.reason}\n` +
-        `**Votos finales:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)\n` +
-        `**Sanción:** ${timeoutLabel}\n` +
-        `**Aplicado por:** Votación comunitaria`
+        `**Usuario:** ${vote.targetUser.username}.\n` +
+        `**Razón:** ${vote.reason}.\n` +
+        `**Votos finales:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos).\n` +
+        `**Sanción:** ${timeoutLabel}.\n` +
+        `**Aplicado por:** votación comunitaria.`
       )
       .setColor(0x00ff00)
       .setTimestamp();
   }
 
   return new EmbedBuilder()
-    .setTitle('❌ Votación Rechazada')
+    .setTitle('❌ Votación rechazada.')
     .setDescription(
-      `**Usuario:** ${vote.targetUser.username}\n` +
-      `**Razón:** ${vote.reason}\n` +
-      `**Votos finales:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)\n` +
-      `**Resultado:** No se alcanzaron los votos necesarios (mínimo 5)`
+      `**Usuario:** ${vote.targetUser.username}.\n` +
+      `**Razón:** ${vote.reason}.\n` +
+      `**Votos finales:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos).\n` +
+      `**Resultado:** no se alcanzaron los votos necesarios (mínimo 5).`
     )
     .setColor(0x808080)
     .setTimestamp();
@@ -79,12 +79,12 @@ export function createCompletionEmbed(vote: VoteData, netVotes: number, upVoteCo
 
 export function createCancellationEmbed(vote: VoteData, cancelledBy: string): EmbedBuilder {
   return new EmbedBuilder()
-    .setTitle('🛑 Votación Cancelada por Administrador')
+    .setTitle('🛑 Votación cancelada por un Administrador')
     .setDescription(
-      `**Usuario:** ${vote.targetUser.username}\n` +
-      `**Razón:** ${vote.reason}\n` +
-      `**Iniciado por:** ${vote.initiator.username}\n` +
-      `**Cancelado por:** ${cancelledBy}`
+      `**Usuario:** ${vote.targetUser.username}.\n` +
+      `**Razón:** ${vote.reason}.\n` +
+      `**Iniciado por:** ${vote.initiator.username}.\n` +
+      `**Cancelado por:** ${cancelledBy}.`
     )
     .setColor(0x808080)
     .setTimestamp();

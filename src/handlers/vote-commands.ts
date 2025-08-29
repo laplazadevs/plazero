@@ -98,12 +98,12 @@ export async function handleVoteTimeoutCommand(
   
   // Notify target user
   try {
-    await targetUser.send(`⚠️ Se ha iniciado una votación de timeout en tu contra en el servidor **${interaction.guild?.name}**.\n**Razón:** ${reason}\n**Iniciado por:** ${initiator.username}\n\nLa votación durará 5 minutos.`);
+    await targetUser.send(`⚠️ Se ha iniciado una votación de timeout en tu contra en el servidor **${interaction.guild?.name}**.\n**Razón:** ${reason}.\n**Iniciado por:** ${initiator.username}.\n\nLa votación durará 5 minutos.`);
   } catch {
     // User might have DMs disabled
   }
   
-  await interaction.editReply({ content: `✅ Votación iniciada contra ${targetUser.username} en #${MODERACION_CHANNEL_NAME}. ID: \`${voteId}\`` });
+  await interaction.editReply({ content: `✅ Votación iniciada contra ${targetUser.username} en #${MODERACION_CHANNEL_NAME}. ID: \`${voteId}\`.` });
 }
 
 export async function handleCancelVoteCommand(
