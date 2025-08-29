@@ -110,7 +110,7 @@ client.once('ready', () => {
   // Clean up expired cooldowns every hour
   setInterval(() => {
     voteManager.cleanupExpiredCooldowns(60 * 60 * 1000); // 1 hour
-    console.log('Cleaned up expired cooldowns');
+    console.log('Cleaned up expired cooldowns!');
   }, 60 * 60 * 1000);
 });
 
@@ -158,7 +158,7 @@ client.on(Events.MessageReactionRemove, async (reaction, user) => {
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('Shutting down gracefully...');
-  console.log('Vote Manager Stats:', voteManager.getStats());
+  console.log('Vote manager stats:', voteManager.getStats());
   client.destroy();
   process.exit(0);
 });

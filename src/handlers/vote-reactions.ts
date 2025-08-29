@@ -137,7 +137,7 @@ async function handleTibioReaction(reaction: MessageReaction, user: User): Promi
       
       // Don't timeout admins
       if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
-        await member.timeout(60000, 'Votó como tibio'); // 1 minute timeout
+        await member.timeout(60000, 'Votó como tibio.'); // 1 minute timeout
         
         // Send punishment message to moderation channel
         const moderacionChannel = guild.channels.cache.find(
@@ -145,7 +145,7 @@ async function handleTibioReaction(reaction: MessageReaction, user: User): Promi
         ) as TextChannel;
         
         if (moderacionChannel) {
-          await moderacionChannel.send(`${user} recibió un timeout por votar como tibio`);
+          await moderacionChannel.send(`${user} recibió un timeout por votar como tibio.`);
         }
       }
     }

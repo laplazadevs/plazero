@@ -22,7 +22,7 @@ export async function completeVote(voteId: string, voteManager: VoteManager): Pr
   const channel = discordClient.channels.cache.get(vote.channelId) as TextChannel;
   if (!channel) return;
   
-  console.log(`Completing vote ${voteId}: ${netVotes} net votes`);
+  console.log(`Completing vote ${voteId}: ${netVotes} net votes.`);
   
   let timeoutApplied = false;
   let timeoutDuration = 0;
@@ -45,9 +45,9 @@ export async function completeVote(voteId: string, voteManager: VoteManager): Pr
     try {
       const guild = channel.guild;
       const targetMember = await guild.members.fetch(vote.targetUser.id);
-      await targetMember.timeout(timeoutDuration, `Votación comunitaria: ${vote.reason}`);
+      await targetMember.timeout(timeoutDuration, `Votación comunitaria: ${vote.reason}.`);
       timeoutApplied = true;
-      console.log(`Applied ${timeoutLabel} timeout to ${vote.targetUser.username}`);
+      console.log(`Applied ${timeoutLabel} timeout to ${vote.targetUser.username}.`);
     } catch (timeoutError) {
       console.error('Error applying timeout:', timeoutError);
       error = true;
@@ -81,20 +81,20 @@ export async function completeVote(voteId: string, voteManager: VoteManager): Pr
       let durationText = '';
       
       if (timeoutHours > 0) {
-        durationText = `${timeoutHours} hora(s)`;
+        durationText = `${timeoutHours} hora(s).`;
       } else {
-        durationText = `${timeoutMinutes} minuto(s)`;
+        durationText = `${timeoutMinutes} minuto(s).`;
       }
       
       await vote.targetUser.send(
         `⚠️ Se te ha aplicado un timeout de **${durationText}** en **${channel.guild.name}**.\n` +
-        `**Razón:** ${vote.reason}\n` +
-        `**Votos:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)`
+        `**Razón:** ${vote.reason}.\n` +
+        `**Votos:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos.)`
       );
     } else {
       await vote.targetUser.send(
         `✅ La votación de timeout en tu contra ha sido rechazada en **${channel.guild.name}**.\n` +
-        `**Votos:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)`
+        `**Votos:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos.)`
       );
     }
   } catch {
