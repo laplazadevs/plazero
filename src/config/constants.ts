@@ -28,8 +28,8 @@ export const MODERACION_CHANNEL_NAME = '🧑‍⚖️︱moderación';
 
 // Vote thresholds and corresponding timeout durations
 export const VOTE_THRESHOLDS: VoteThreshold[] = [
-  { votes: 5, duration: 5 * 60 * 1000, label: 'Light Warning (5 min)' },
-  { votes: 8, duration: 30 * 60 * 1000, label: 'Moderate Sanction (30 min)' },
-  { votes: 12, duration: 2 * 60 * 60 * 1000, label: 'Serious Violation (2 hours)' },
-  { votes: 15, duration: 24 * 60 * 60 * 1000, label: 'Severe Misconduct (24 hours)' }
+  { votes: 5, duration: 5 * 60 * 1000, label: 'Light warning (5 min).' },
+  { votes: 8, duration: 30 * 60 * 1000, label: 'Moderate sanction (30 min).' },
+  { votes: 12, duration: 2 * 60 * 60 * 1000, label: 'Serious violation (2 hours).' },
+  { votes: 15, duration: 24 * 60 * 60 * 1000, label: 'Severe misconduct (24 hours).' }
 ];
