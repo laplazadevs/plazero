@@ -3,33 +3,39 @@ import dayjs from 'dayjs';
 import isBetween from 'dayjs/plugin/isBetween.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
-import { 
-  BaseMessageOptions, 
-  Client, 
-  Events, 
-  GatewayIntentBits, 
-  TextChannel 
-} from 'discord.js';
-import dotenv from 'dotenv';
+import { BaseMessageOptions, Client, Events, GatewayIntentBits, TextChannel } from 'discord.js';
 
 // Import our modular services
-import { VoteManager } from './services/vote-manager.js';
-import { setDiscordClient } from './handlers/vote-updates.js';
-import { setDiscordClientForCompletion } from './handlers/vote-completion.js';
+import {
+    CANCEL_VOTE_COMMAND,
+    MEME_CHANNEL_NAME,
+    MEME_CONTEST_COMMAND,
+    MEME_OF_THE_YEAR_COMMAND,
+    MEME_STATS_COMMAND,
+    SCRAP_MESSAGES_COMMAND,
+    VOTE_DURATION_MS,
+    VOTE_TIMEOUT_COMMAND,
+} from './config/constants.js';
+import {
+    handleGetTopCommand,
+    handleMemeContestCommand,
+    handleMemeOfTheYearCommand,
+    handleMemeStatsCommand,
+} from './handlers/meme-commands.js';
+import { handleMemeButtonInteraction } from './handlers/meme-interactions.js';
+import { handleCancelVoteCommand, handleVoteTimeoutCommand } from './handlers/vote-commands.js';
+import { completeVote, setDiscordClientForCompletion } from './handlers/vote-completion.js';
 import { handleVoteReactionAdd, handleVoteReactionRemove } from './handlers/vote-reactions.js';
-import { handleVoteTimeoutCommand, handleCancelVoteCommand } from './handlers/vote-commands.js';
-import { processMessages, announceYearWinners } from './services/meme-service.js';
+import { setDiscordClient } from './handlers/vote-updates.js';
+import { handleMemberJoin } from './handlers/welcome-handler.js';
+import { handleWelcomeButtonInteraction } from './handlers/welcome-interactions.js';
+import { handleWelcomeMessage } from './handlers/welcome-messages.js';
+import { DatabaseService } from './services/database-service.js';
+import { MemeManager } from './services/meme-manager.js';
+import { VoteManager } from './services/vote-manager.js';
+import { WelcomeManager } from './services/welcome-manager.js';
 
 // Import constants
-import { 
-  SCRAP_MESSAGES_COMMAND,
-  MEME_OF_THE_YEAR_COMMAND,
-  VOTE_TIMEOUT_COMMAND,
-  CANCEL_VOTE_COMMAND,
-  LAUGH_EMOJIS
-} from './config/constants.js';
-
-dotenv.config();
 
 // Setup dayjs
 dayjs.extend(isBetween);
@@ -39,129 +45,212 @@ dayjs.tz.setDefault('America/Bogota');
 
 // Initialize Discord client
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMessageReactions,
-  ],
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.GuildMembers,
+    ],
 });
 
-// Initialize vote manager
+// Initialize database and managers
+const databaseService = DatabaseService.getInstance();
 const voteManager = new VoteManager();
+const welcomeManager = new WelcomeManager();
+const memeManager = new MemeManager();
 
 // Set up client reference for vote updates and completion
 setDiscordClient(client);
 setDiscordClientForCompletion(client);
 
-// Discord Bot Login
-client
-  .login(process.env.DISCORD_BOT_TOKEN)
-  .then(() => {
-    console.log('Bot logged in!');
-  })
-  .catch((err) => {
-    console.error('Failed to log in:', err);
-  });
+// Set up periodic vote completion check (every 30 seconds)
+setInterval(async () => {
+    try {
+        const activeVotes = await voteManager.getAllActiveVotes();
+        const now = new Date();
+        
+        for (const vote of activeVotes) {
+            const timeElapsed = now.getTime() - vote.startTime.getTime();
+            if (timeElapsed >= VOTE_DURATION_MS) {
+                console.log(`Found expired vote ${vote.id}, completing it`);
+                await completeVote(vote.id, voteManager);
+            }
+        }
+    } catch (error) {
+        console.error('Error in periodic vote completion check:', error);
+    }
+}, 30000); // Check every 30 seconds
+
+// Initialize database and start bot
+async function initializeBot(): Promise<void> {
+    try {
+        // Test database connection
+        const dbConnected = await databaseService.testConnection();
+        if (!dbConnected) {
+            console.error(
+                'Failed to connect to database. Please check your database configuration.'
+            );
+            process.exit(1);
+        }
+
+        // Initialize database schema
+        await databaseService.initializeSchema();
+        await databaseService.createCleanupFunctions();
+
+        // Start Discord bot
+        await client.login(process.env.DISCORD_BOT_TOKEN);
+        console.log('Bot logged in!');
+    } catch (error) {
+        console.error('Failed to initialize bot:', error);
+        process.exit(1);
+    }
+}
+
+initializeBot();
 
 client.once('ready', () => {
-  console.log('Bot is ready!');
-  
-  // Schedule the command to run every Friday at 11:40 AM Bogota time
-  const job = new CronJob(
-    '40 11 * * 5', // cronTime
-    async () => {  // onTick
-      console.log('Running scheduled gettop command...');
-      const guild = client.guilds.cache.first();
-      if (!guild) return;
+    console.log('Bot is ready!');
 
-      const channel = guild.channels.cache.get(process.env.MEME_CHANNEL_ID as string) as TextChannel;
-      if (!channel) return;
+    // Schedule the command to run every Friday at 11:40 AM Bogota time
+    const job = new CronJob(
+        '40 11 * * 5', // cronTime
+        async () => {
+            // onTick
+            console.log('Running scheduled gettop command...');
+            const guild = client.guilds.cache.first();
+            if (!guild) return;
 
-      try {
-        const fakeInteraction = {
-          reply: async (msg: string) => {
-            await channel.send(msg);
-          },
-          followUp: async (msg: string | BaseMessageOptions) => {
-            await channel.send(msg);
-          },
-          deferred: false,
-          replied: false,
-          editReply: async (msg: string) => {
-            await channel.send(msg);
-          },
-          client: client,
-          channel: channel
-        } as any;
+            const channel = guild.channels.cache.find(
+                ch => ch.isTextBased() && (ch as TextChannel).name === MEME_CHANNEL_NAME
+            ) as TextChannel;
+            if (!channel) return;
 
-        await processMessages(fakeInteraction);
-      } catch (error) {
-        console.error('Error in scheduled command:', error);
-      }
-    },
-    null, // onComplete
-    true,  // start
-    'America/Bogota' // timeZone
-  );
+            try {
+                const fakeInteraction = {
+                    reply: async (msg: string) => {
+                        await channel.send(msg);
+                    },
+                    followUp: async (msg: string | BaseMessageOptions) => {
+                        await channel.send(msg);
+                    },
+                    deferred: false,
+                    replied: false,
+                    editReply: async (msg: string) => {
+                        await channel.send(msg);
+                    },
+                    client: client,
+                    channel: channel,
+                } as any;
 
-  job.start();
-  
-  // Clean up expired cooldowns every hour
-  setInterval(() => {
-    voteManager.cleanupExpiredCooldowns(60 * 60 * 1000); // 1 hour
-    console.log('Cleaned up expired cooldowns');
-  }, 60 * 60 * 1000);
+                await handleGetTopCommand(fakeInteraction, memeManager);
+            } catch (error) {
+                console.error('Error in scheduled command:', error);
+            }
+        },
+        null, // onComplete
+        true, // start
+        'America/Bogota' // timeZone
+    );
+
+    job.start();
+
+    // Run database cleanup every hour
+    setInterval(async () => {
+        try {
+            await databaseService.runCleanup();
+            console.log('Database cleanup completed');
+        } catch (error) {
+            console.error('Error during database cleanup:', error);
+        }
+    }, 60 * 60 * 1000); // 1 hour
 });
 
-// Handle slash commands
-client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-
-  try {
-    if (interaction.commandName === SCRAP_MESSAGES_COMMAND) {
-      await processMessages(interaction);
-    } else if (interaction.commandName === MEME_OF_THE_YEAR_COMMAND) {
-      await announceYearWinners(interaction);
-      
-    } else if (interaction.commandName === VOTE_TIMEOUT_COMMAND) {
-      await handleVoteTimeoutCommand(interaction, voteManager);
-    } else if (interaction.commandName === CANCEL_VOTE_COMMAND) {
-      await handleCancelVoteCommand(interaction, voteManager);
-    }
-  } catch (error) {
-    console.error('Error processing command:', error);
-    const errorMessage = 'There was an error processing your command.';
-    
+// Handle interactions (slash commands and button interactions)
+client.on(Events.InteractionCreate, async interaction => {
     try {
-      if (interaction.deferred) {
-        await interaction.editReply(errorMessage);
-      } else if (!interaction.replied) {
-        await interaction.reply({ content: errorMessage, ephemeral: true });
-      }
-    } catch (replyError) {
-      // If we can't even send an error message, just log it
-      console.error('Could not send error reply:', replyError);
+        if (interaction.isChatInputCommand()) {
+            if (interaction.commandName === SCRAP_MESSAGES_COMMAND) {
+                await handleGetTopCommand(interaction, memeManager);
+            } else if (interaction.commandName === MEME_OF_THE_YEAR_COMMAND) {
+                await handleMemeOfTheYearCommand(interaction, memeManager);
+            } else if (interaction.commandName === MEME_STATS_COMMAND) {
+                await handleMemeStatsCommand(interaction, memeManager);
+            } else if (interaction.commandName === MEME_CONTEST_COMMAND) {
+                await handleMemeContestCommand(interaction, memeManager);
+            } else if (interaction.commandName === VOTE_TIMEOUT_COMMAND) {
+                await handleVoteTimeoutCommand(interaction, voteManager);
+            } else if (interaction.commandName === CANCEL_VOTE_COMMAND) {
+                await handleCancelVoteCommand(interaction, voteManager);
+            }
+        } else if (interaction.isButton()) {
+            if (interaction.customId.startsWith('welcome_')) {
+                await handleWelcomeButtonInteraction(interaction, welcomeManager);
+            } else if (interaction.customId.startsWith('meme_contest_')) {
+                await handleMemeButtonInteraction(interaction, memeManager);
+            }
+        }
+    } catch (error) {
+        console.error('Error processing interaction:', error);
+        const errorMessage = 'There was an error processing your interaction.';
+
+        try {
+            if (interaction.isRepliable()) {
+                if (interaction.deferred) {
+                    await interaction.editReply(errorMessage);
+                } else if (!interaction.replied) {
+                    await interaction.reply({ content: errorMessage, ephemeral: true });
+                }
+            }
+        } catch (replyError) {
+            // If we can't even send an error message, just log it
+            console.error('Could not send error reply:', replyError);
+        }
     }
-  }
 });
 
 // Handle message reactions for voting
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
-  await handleVoteReactionAdd(reaction, user, voteManager);
+    await handleVoteReactionAdd(reaction, user, voteManager);
 });
 
 client.on(Events.MessageReactionRemove, async (reaction, user) => {
-  await handleVoteReactionRemove(reaction, user, voteManager);
+    await handleVoteReactionRemove(reaction, user, voteManager);
+});
+
+// Handle new member joins
+client.on(Events.GuildMemberAdd, async member => {
+    await handleMemberJoin(member, welcomeManager);
+});
+
+// Handle messages for welcome information collection
+client.on(Events.MessageCreate, async message => {
+    await handleWelcomeMessage(message, welcomeManager);
 });
 
 // Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('Shutting down gracefully...');
-  console.log('Vote Manager Stats:', voteManager.getStats());
-  client.destroy();
-  process.exit(0);
+process.on('SIGINT', async () => {
+    console.log('Shutting down gracefully...');
+
+    try {
+        const [voteStats, welcomeStats, memeStats] = await Promise.all([
+            voteManager.getStats(),
+            welcomeManager.getStats(),
+            memeManager.getStats(),
+        ]);
+
+        console.log('Vote Manager Stats:', voteStats);
+        console.log('Welcome Manager Stats:', welcomeStats);
+        console.log('Meme Manager Stats:', memeStats);
+
+        await databaseService.close();
+        client.destroy();
+        process.exit(0);
+    } catch (error) {
+        console.error('Error during shutdown:', error);
+        process.exit(1);
+    }
 });
 
 // Export for potential testing
-export { client, voteManager };
+export { client, voteManager, welcomeManager, memeManager };

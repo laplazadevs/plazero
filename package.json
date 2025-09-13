@@ -14,15 +14,28 @@
         "format:fix": "prettier --write .",
         "clean": "git clean -xdf --exclude=\"/config/**/*\"",
         "clean:dry": "git clean -xdf --exclude=\"/config/**/*\" --dry-run",
-        "build": "tsc --project tsconfig.json",
+        "build": "tsc --project tsconfig.json && npm run copy-migrations",
+        "copy-migrations": "mkdir -p dist/migrations && cp src/migrations/*.sql dist/migrations/",
         "register-commands": "node dist/register-commands.js",
-        "start": "npm run build && npm run register-commands && npm run start:bot",
+        "start": "npm run build && npm run migrate:up:prod && npm run register-commands && npm run start:bot",
         "start:bot": "node --enable-source-maps dist/index.js",
-        "start:production": "npm run build && npm run register-commands && npm run start:bot",
-        "dev": "npx ts-node --esm src/register-commands.ts && npx ts-node --esm src/index.ts",
-        "dev:register": "npx ts-node --esm src/register-commands.ts"
+        "start:production": "npm run build && npm run migrate:up:prod && npm run register-commands && npm run start:bot",
+        "dev": "npm run migrate:up && npx ts-node --esm src/register-commands.ts && npx ts-node --esm src/index.ts",
+        "dev:register": "npx ts-node --esm src/register-commands.ts",
+        "migrate": "npx ts-node --esm src/scripts/migrate.ts",
+        "migrate:prod": "node dist/scripts/migrate.js",
+        "migrate:up": "npm run migrate up",
+        "migrate:up:prod": "npm run migrate:prod up",
+        "migrate:status": "npm run migrate status",
+        "migrate:status:prod": "npm run migrate:prod status",
+        "migrate:rollback": "npm run migrate rollback",
+        "migrate:rollback:prod": "npm run migrate:prod rollback",
+        "migrate:create-db": "npm run migrate create-db",
+        "migrate:create-db:prod": "npm run migrate:prod create-db",
+        "setup": "npm run migrate:create-db && npm run migrate:up"
     },
     "devDependencies": {
+        "@types/pg": "^8.10.9",
         "@typescript-eslint/eslint-plugin": "^5.58.0",
         "@typescript-eslint/parser": "^5.58.0",
         "eslint": "^8.38.0",
@@ -34,11 +47,13 @@
     "dependencies": {
         "@discordjs/builders": "^1.6.1",
         "@discordjs/rest": "^1.7.0",
+        "@types/uuid": "^10.0.0",
         "cron": "^3.2.1",
         "dayjs": "^1.11.7",
         "discord-api-types": "^0.37.39",
         "discord.js": "^14.9.0",
-        "dotenv": "^16.0.3",
-        "ts-node": "^10.9.1"
+        "pg": "^8.11.3",
+        "ts-node": "^10.9.1",
+        "uuid": "^13.0.0"
     }
 }

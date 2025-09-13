@@ -1,96 +1,243 @@
+import { User } from 'discord.js';
+
+import { UserRepository } from '../repositories/user-repository.js';
+import { VoteRepository } from '../repositories/vote-repository.js';
 import { VoteData } from '../types/vote.js';
 
 export class VoteManager {
-  private activeVotes = new Map<string, VoteData>();
-  private userCooldowns = new Map<string, Date>();
+    private voteRepo: VoteRepository;
+    private userRepo: UserRepository;
 
-  // Get active vote by ID
-  getVote(voteId: string): VoteData | undefined {
-    return this.activeVotes.get(voteId);
-  }
-
-  // Get vote by message ID
-  getVoteByMessageId(messageId: string): VoteData | undefined {
-    return Array.from(this.activeVotes.values()).find(vote => vote.messageId === messageId);
-  }
-
-  // Add new vote
-  addVote(vote: VoteData): void {
-    this.activeVotes.set(vote.id, vote);
-  }
-
-  // Remove vote (cleanup)
-  removeVote(voteId: string): boolean {
-    return this.activeVotes.delete(voteId);
-  }
-
-  // Mark vote as completed and schedule cleanup
-  completeVote(voteId: string): void {
-    const vote = this.activeVotes.get(voteId);
-    if (vote) {
-      vote.completed = true;
-      // Schedule cleanup after 30 seconds to allow for final message updates
-      setTimeout(() => {
-        this.removeVote(voteId);
-        console.log(`Cleaned up completed vote: ${voteId}`);
-      }, 30000);
+    constructor() {
+        this.voteRepo = new VoteRepository();
+        this.userRepo = new UserRepository();
     }
-  }
 
-  // Check if user has an active vote against them
-  hasActiveVoteAgainst(userId: string): boolean {
-    return Array.from(this.activeVotes.values()).some(vote => 
-      vote.targetUser.id === userId && !vote.completed
-    );
-  }
+    // Get active vote by ID
+    async getVote(voteId: string): Promise<VoteData | undefined> {
+        const voteData = await this.voteRepo.getVote(voteId);
+        if (!voteData) return undefined;
 
-  // Get all active votes
-  getAllActiveVotes(): VoteData[] {
-    return Array.from(this.activeVotes.values()).filter(vote => !vote.completed);
-  }
-
-  // Cooldown management
-  setCooldown(userId: string, time: Date): void {
-    this.userCooldowns.set(userId, time);
-  }
-
-  getCooldown(userId: string): Date | undefined {
-    return this.userCooldowns.get(userId);
-  }
-
-  // Check if user is on cooldown
-  isOnCooldown(userId: string, cooldownDuration: number): { onCooldown: boolean; remainingTime?: number } {
-    const lastVoteTime = this.userCooldowns.get(userId);
-    if (!lastVoteTime) return { onCooldown: false };
-
-    const now = Date.now();
-    const timePassed = now - lastVoteTime.getTime();
-    
-    if (timePassed < cooldownDuration) {
-      const remainingTime = Math.ceil((cooldownDuration - timePassed) / 60000);
-      return { onCooldown: true, remainingTime };
+        return await this.convertToVoteData(voteData);
     }
-    
-    return { onCooldown: false };
-  }
 
-  // Clean up expired cooldowns (optional maintenance)
-  cleanupExpiredCooldowns(cooldownDuration: number): void {
-    const now = Date.now();
-    for (const [userId, time] of this.userCooldowns.entries()) {
-      if (now - time.getTime() >= cooldownDuration) {
-        this.userCooldowns.delete(userId);
-      }
+    // Get vote by message ID
+    async getVoteByMessageId(messageId: string): Promise<VoteData | undefined> {
+        const voteData = await this.voteRepo.getVoteByMessageId(messageId);
+        if (!voteData) return undefined;
+
+        return await this.convertToVoteData(voteData);
     }
-  }
 
-  // Get statistics
-  getStats() {
-    return {
-      activeVotes: this.activeVotes.size,
-      completedVotes: Array.from(this.activeVotes.values()).filter(vote => vote.completed).length,
-      ongoingVotes: Array.from(this.activeVotes.values()).filter(vote => !vote.completed).length,
-      userCooldowns: this.userCooldowns.size
-    };
-  }
+    // Add new vote
+    async addVote(vote: VoteData): Promise<void> {
+        await this.voteRepo.createVote(
+            vote.id,
+            vote.targetUser,
+            vote.initiator,
+            vote.reason,
+            vote.messageId,
+            vote.channelId
+        );
+    }
+
+    // Remove vote (cleanup)
+    async removeVote(_voteId: string): Promise<boolean> {
+        // Votes are automatically cleaned up by the database cleanup functions
+        // This method is kept for compatibility but doesn't need to do anything
+        return true;
+    }
+
+    // Mark vote as completed and schedule cleanup
+    async completeVote(voteId: string): Promise<void> {
+        const vote = await this.getVote(voteId);
+        if (!vote) return;
+
+        const { upVoteCount, downVoteCount, netVotes } = this.calculateVoteCounts(
+            vote.upVotes,
+            vote.downVotes
+        );
+
+        const timeoutApplied = netVotes >= 5;
+
+        await this.voteRepo.completeVote(
+            voteId,
+            upVoteCount,
+            downVoteCount,
+            netVotes,
+            timeoutApplied
+        );
+
+        // Schedule cleanup after 30 seconds to allow for final message updates
+        setTimeout(() => {
+            console.log(`Vote ${voteId} marked for cleanup`);
+        }, 30000);
+    }
+
+    // Check if user has an active vote against them
+    async hasActiveVoteAgainst(userId: string): Promise<boolean> {
+        return await this.voteRepo.hasActiveVoteAgainst(userId);
+    }
+
+    // Get all active votes
+    async getAllActiveVotes(): Promise<VoteData[]> {
+        const activeVotes = await this.voteRepo.getActiveVotes();
+        const result: VoteData[] = [];
+
+        for (const voteData of activeVotes) {
+            const vote = await this.convertToVoteData(voteData);
+            if (vote) {
+                result.push(vote);
+            }
+        }
+
+        return result;
+    }
+
+    // Cooldown management
+    async setCooldown(userId: string, time: Date): Promise<void> {
+        await this.voteRepo.setUserCooldown(userId, time);
+    }
+
+    async getCooldown(userId: string): Promise<Date | undefined> {
+        const cooldown = await this.voteRepo.getUserCooldown(userId);
+        return cooldown?.last_vote_time;
+    }
+
+    // Check if user is on cooldown
+    async isOnCooldown(
+        userId: string,
+        cooldownDuration: number
+    ): Promise<{ onCooldown: boolean; remainingTime?: number }> {
+        return await this.voteRepo.isUserOnCooldown(userId, cooldownDuration);
+    }
+
+    // Clean up expired cooldowns (optional maintenance)
+    async cleanupExpiredCooldowns(_cooldownDuration: number): Promise<void> {
+        // This is now handled by the database cleanup functions
+        console.log('Cooldown cleanup is handled by database cleanup functions');
+    }
+
+    // Get statistics
+    async getStats(): Promise<{
+        activeVotes: number;
+        completedVotes: number;
+        ongoingVotes: number;
+        userCooldowns: number;
+    }> {
+        return await this.voteRepo.getVoteStats();
+    }
+
+    // Ensure user exists in database
+    async ensureUserExists(user: any): Promise<void> {
+        const existingUser = await this.userRepo.getUser(user.id);
+        if (!existingUser) {
+            // Create user record if it doesn't exist
+            await this.userRepo.upsertUser(user);
+        }
+    }
+
+    // Add vote reaction
+    async addVoteReaction(
+        voteId: string,
+        userId: string,
+        reactionType: 'up' | 'down' | 'white',
+        weight: number
+    ): Promise<void> {
+        await this.voteRepo.addVoteReaction(voteId, userId, reactionType, weight);
+    }
+
+    // Remove vote reaction
+    async removeVoteReaction(
+        voteId: string,
+        userId: string,
+        reactionType: 'up' | 'down' | 'white'
+    ): Promise<void> {
+        await this.voteRepo.removeVoteReaction(voteId, userId, reactionType);
+    }
+
+    // Helper method to convert database data to VoteData format
+    private async convertToVoteData(voteData: any): Promise<VoteData | undefined> {
+        try {
+            // Get users
+            const [targetUser, initiator] = await Promise.all([
+                this.userRepo.getUser(voteData.target_user_id),
+                this.userRepo.getUser(voteData.initiator_id),
+            ]);
+
+            if (!targetUser || !initiator) {
+                console.error('Could not find users for vote:', voteData.id);
+                return undefined;
+            }
+
+            // Get vote reactions
+            const reactions = await this.voteRepo.getVoteReactions(voteData.id);
+
+            const upVotes = new Map<string, number>();
+            const downVotes = new Map<string, number>();
+            const whiteVotes = new Map<string, number>();
+
+            for (const reaction of reactions) {
+                const weight = reaction.weight;
+                switch (reaction.reaction_type) {
+                    case 'up':
+                        upVotes.set(reaction.user_id, weight);
+                        break;
+                    case 'down':
+                        downVotes.set(reaction.user_id, weight);
+                        break;
+                    case 'white':
+                        whiteVotes.set(reaction.user_id, weight);
+                        break;
+                }
+            }
+
+            // Create User objects from database data
+            const targetUserObj = {
+                id: targetUser.id,
+                username: targetUser.username,
+                discriminator: targetUser.discriminator,
+                avatarURL: () => targetUser.avatar_url,
+            } as User;
+
+            const initiatorObj = {
+                id: initiator.id,
+                username: initiator.username,
+                discriminator: initiator.discriminator,
+                avatarURL: () => initiator.avatar_url,
+            } as User;
+
+            return {
+                id: voteData.id,
+                targetUser: targetUserObj,
+                initiator: initiatorObj,
+                reason: voteData.reason,
+                startTime: voteData.start_time,
+                upVotes,
+                downVotes,
+                whiteVotes,
+                messageId: voteData.message_id,
+                channelId: voteData.channel_id,
+                completed: voteData.completed,
+            };
+        } catch (error) {
+            console.error('Error converting vote data:', error);
+            return undefined;
+        }
+    }
+
+    // Helper method to calculate vote counts
+    private calculateVoteCounts(
+        upVotes: Map<string, number>,
+        downVotes: Map<string, number>
+    ): { upVoteCount: number; downVoteCount: number; netVotes: number } {
+        const upVoteCount = Array.from(upVotes.values()).reduce((sum, weight) => sum + weight, 0);
+        const downVoteCount = Array.from(downVotes.values()).reduce(
+            (sum, weight) => sum + weight,
+            0
+        );
+        const netVotes = upVoteCount - downVoteCount;
+
+        return { upVoteCount, downVoteCount, netVotes };
+    }
 }

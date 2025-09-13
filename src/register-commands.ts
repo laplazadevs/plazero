@@ -1,9 +1,6 @@
 import { SlashCommandBuilder } from '@discordjs/builders';
 import { REST } from '@discordjs/rest';
 import { Routes } from 'discord-api-types/v9';
-import * as dotenv from 'dotenv';
-
-dotenv.config();
 
 const token = process.env.DISCORD_BOT_TOKEN;
 const clientId = process.env.CLIENT_ID;
@@ -32,23 +29,48 @@ const commands = [
         .setName('memeoftheyear')
         .setDescription('Get the most reacted meme of the year 2024 (Jan 1st - Dec 31st)'),
     new SlashCommandBuilder()
+        .setName('meme-stats')
+        .setDescription('Muestra estadísticas de memes y concursos'),
+    new SlashCommandBuilder()
+        .setName('meme-contest')
+        .setDescription('Crea un nuevo concurso de memes')
+        .addStringOption(option =>
+            option
+                .setName('type')
+                .setDescription('Tipo de concurso')
+                .setRequired(true)
+                .addChoices(
+                    { name: 'Semanal', value: 'weekly' },
+                    { name: 'Anual', value: 'yearly' }
+                )
+        )
+        .addStringOption(option =>
+            option
+                .setName('duration')
+                .setDescription('Duración del concurso (ej: 7d, 30d, 1y)')
+                .setRequired(false)
+        ),
+    new SlashCommandBuilder()
         .setName('vote-timeout')
         .setDescription('Inicia una votación para aplicar timeout a un usuario')
         .addUserOption(option =>
-            option.setName('user')
+            option
+                .setName('user')
                 .setDescription('Usuario que recibirá el timeout')
-                .setRequired(true))
+                .setRequired(true)
+        )
         .addStringOption(option =>
-            option.setName('reason')
-                .setDescription('Razón del timeout')
-                .setRequired(true)),
+            option.setName('reason').setDescription('Razón del timeout').setRequired(true)
+        ),
     new SlashCommandBuilder()
         .setName('cancel-vote')
         .setDescription('Cancela una votación activa (solo admins)')
         .addStringOption(option =>
-            option.setName('vote-id')
+            option
+                .setName('vote-id')
                 .setDescription('ID de la votación a cancelar')
-                .setRequired(true)),
+                .setRequired(true)
+        ),
 ].map(command => command.toJSON());
 
 const rest = new REST({ version: '9' }).setToken(token);
