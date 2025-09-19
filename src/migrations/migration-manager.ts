@@ -30,6 +30,7 @@ export class MigrationManager {
             '001_initial_schema.sql',
             '002_cleanup_functions.sql',
             '003_indexes.sql',
+            '004_corabastos_schema.sql',
         ];
 
         for (const file of migrationFiles) {

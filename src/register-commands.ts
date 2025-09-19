@@ -71,6 +71,59 @@ const commands = [
                 .setDescription('ID de la votación a cancelar')
                 .setRequired(true)
         ),
+    new SlashCommandBuilder()
+        .setName('corabastos-agenda')
+        .setDescription('Gestiona la agenda del corabastos')
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('agregar')
+                .setDescription('Agrega un tema a la agenda del corabastos')
+                .addIntegerOption(option =>
+                    option
+                        .setName('turno')
+                        .setDescription('Turno (0=12pm, 1=1pm, 2=2pm, etc.)')
+                        .setRequired(true)
+                        .setMinValue(0)
+                        .setMaxValue(8)
+                )
+                .addStringOption(option =>
+                    option
+                        .setName('tema')
+                        .setDescription('Tema a discutir')
+                        .setRequired(true)
+                        .setMaxLength(200)
+                )
+                .addStringOption(option =>
+                    option
+                        .setName('descripcion')
+                        .setDescription('Descripción opcional del tema')
+                        .setRequired(false)
+                        .setMaxLength(500)
+                )
+        )
+        .addSubcommand(subcommand =>
+            subcommand.setName('ver').setDescription('Ve la agenda del corabastos de esta semana')
+        ),
+    new SlashCommandBuilder()
+        .setName('corabastos-emergencia')
+        .setDescription('Solicita un corabastos de emergencia')
+        .addStringOption(option =>
+            option
+                .setName('razon')
+                .setDescription('Razón de la emergencia')
+                .setRequired(true)
+                .setMaxLength(300)
+        )
+        .addStringOption(option =>
+            option
+                .setName('descripcion')
+                .setDescription('Descripción detallada de la emergencia')
+                .setRequired(false)
+                .setMaxLength(500)
+        ),
+    new SlashCommandBuilder()
+        .setName('corabastos-estado')
+        .setDescription('Muestra el estado actual del corabastos'),
 ].map(command => command.toJSON());
 
 const rest = new REST({ version: '9' }).setToken(token);

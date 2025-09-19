@@ -3,11 +3,14 @@ import dayjs from 'dayjs';
 import isBetween from 'dayjs/plugin/isBetween.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
-import { BaseMessageOptions, Client, Events, GatewayIntentBits, TextChannel } from 'discord.js';
+import { BaseMessageOptions, Client, Events, GatewayIntentBits, Message, TextChannel } from 'discord.js';
 
 // Import our modular services
 import {
     CANCEL_VOTE_COMMAND,
+    CORABASTOS_AGENDA_COMMAND,
+    CORABASTOS_EMERGENCY_COMMAND,
+    CORABASTOS_STATUS_COMMAND,
     MEME_CHANNEL_NAME,
     MEME_CONTEST_COMMAND,
     MEME_OF_THE_YEAR_COMMAND,
@@ -16,6 +19,16 @@ import {
     VOTE_DURATION_MS,
     VOTE_TIMEOUT_COMMAND,
 } from './config/constants.js';
+import {
+    handleCorabastosAgendaCommand,
+    handleCorabastosEmergencyCommand,
+    handleCorabastosStatusCommand,
+} from './handlers/corabastos-commands.js';
+import {
+    handleCorabastosButtonInteraction,
+    handleCorabastosReactionAdd,
+    handleCorabastosReactionRemove,
+} from './handlers/corabastos-interactions.js';
 import {
     handleGetTopCommand,
     handleMemeContestCommand,
@@ -30,6 +43,7 @@ import { setDiscordClient } from './handlers/vote-updates.js';
 import { handleMemberJoin } from './handlers/welcome-handler.js';
 import { handleWelcomeButtonInteraction } from './handlers/welcome-interactions.js';
 import { handleWelcomeMessage } from './handlers/welcome-messages.js';
+import { CorabastosManager } from './services/corabastos-manager.js';
 import { DatabaseService } from './services/database-service.js';
 import { MemeManager } from './services/meme-manager.js';
 import { VoteManager } from './services/vote-manager.js';
@@ -59,6 +73,7 @@ const databaseService = DatabaseService.getInstance();
 const voteManager = new VoteManager();
 const welcomeManager = new WelcomeManager();
 const memeManager = new MemeManager();
+const corabastosManager = new CorabastosManager();
 
 // Set up client reference for vote updates and completion
 setDiscordClient(client);
@@ -164,6 +179,18 @@ client.once('ready', () => {
             console.error('Error during database cleanup:', error);
         }
     }, 60 * 60 * 1000); // 1 hour
+
+    // Run corabastos cleanup every 30 minutes
+    setInterval(async () => {
+        try {
+            const expiredRequests = await corabastosManager.cleanupExpiredRequests();
+            if (expiredRequests > 0) {
+                console.log(`Cleaned up ${expiredRequests} expired emergency requests`);
+            }
+        } catch (error) {
+            console.error('Error during corabastos cleanup:', error);
+        }
+    }, 30 * 60 * 1000); // 30 minutes
 });
 
 // Handle interactions (slash commands and button interactions)
@@ -182,12 +209,20 @@ client.on(Events.InteractionCreate, async interaction => {
                 await handleVoteTimeoutCommand(interaction, voteManager);
             } else if (interaction.commandName === CANCEL_VOTE_COMMAND) {
                 await handleCancelVoteCommand(interaction, voteManager);
+            } else if (interaction.commandName === CORABASTOS_AGENDA_COMMAND) {
+                await handleCorabastosAgendaCommand(interaction, corabastosManager);
+            } else if (interaction.commandName === CORABASTOS_EMERGENCY_COMMAND) {
+                await handleCorabastosEmergencyCommand(interaction, corabastosManager);
+            } else if (interaction.commandName === CORABASTOS_STATUS_COMMAND) {
+                await handleCorabastosStatusCommand(interaction, corabastosManager);
             }
         } else if (interaction.isButton()) {
             if (interaction.customId.startsWith('welcome_')) {
                 await handleWelcomeButtonInteraction(interaction, welcomeManager);
             } else if (interaction.customId.startsWith('meme_contest_')) {
                 await handleMemeButtonInteraction(interaction, memeManager);
+            } else if (interaction.customId.startsWith('corabastos_')) {
+                await handleCorabastosButtonInteraction(interaction, corabastosManager);
             }
         }
     } catch (error) {
@@ -209,13 +244,15 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 });
 
-// Handle message reactions for voting
+// Handle message reactions for voting and corabastos
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
     await handleVoteReactionAdd(reaction, user, voteManager);
+    await handleCorabastosReactionAdd(reaction, user, corabastosManager);
 });
 
 client.on(Events.MessageReactionRemove, async (reaction, user) => {
     await handleVoteReactionRemove(reaction, user, voteManager);
+    await handleCorabastosReactionRemove(reaction, user, corabastosManager);
 });
 
 // Handle new member joins
@@ -230,19 +267,23 @@ client.on(Events.MessageCreate, async message => {
 
 // Handle message edits for welcome information collection
 client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
+    let fullMessage: Message;
+    
     if (newMessage.partial) {
         try {
-            await newMessage.fetch();
+            fullMessage = await newMessage.fetch();
         } catch (error) {
             console.error('Failed to fetch partial message:', error);
             return;
         }
+    } else {
+        fullMessage = newMessage;
     }
 
     // Only handle full messages with content
-    if (!newMessage.content) return;
+    if (!fullMessage.content) return;
 
-    await handleWelcomeMessage(newMessage, welcomeManager);
+    await handleWelcomeMessage(fullMessage, welcomeManager);
 });
 
 // Graceful shutdown
@@ -250,15 +291,17 @@ process.on('SIGINT', async () => {
     console.log('Shutting down gracefully...');
 
     try {
-        const [voteStats, welcomeStats, memeStats] = await Promise.all([
+        const [voteStats, welcomeStats, memeStats, corabastosStats] = await Promise.all([
             voteManager.getStats(),
             welcomeManager.getStats(),
             memeManager.getStats(),
+            corabastosManager.getStats(),
         ]);
 
         console.log('Vote Manager Stats:', voteStats);
         console.log('Welcome Manager Stats:', welcomeStats);
         console.log('Meme Manager Stats:', memeStats);
+        console.log('Corabastos Manager Stats:', corabastosStats);
 
         await databaseService.close();
         client.destroy();
@@ -270,4 +313,4 @@ process.on('SIGINT', async () => {
 });
 
 // Export for potential testing
-export { client, voteManager, welcomeManager, memeManager };
+export { client, voteManager, welcomeManager, memeManager, corabastosManager };
