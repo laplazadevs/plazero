@@ -114,7 +114,11 @@ export async function handleVoteTimeoutCommand(
     }, VOTE_DURATION_MS);
 
     // Also log the scheduled completion for debugging
-    console.log(`Vote ${voteId} scheduled for completion in ${VOTE_DURATION_MS}ms (${VOTE_DURATION_MS / 60000} minutes)`);
+    console.log(
+        `Vote ${voteId} scheduled for completion in ${VOTE_DURATION_MS}ms (${
+            VOTE_DURATION_MS / 60000
+        } minutes)`
+    );
 
     // Notify target user
     try {

@@ -3,7 +3,7 @@
 import { Pool } from 'pg';
 
 import { MigrationManager } from '../migrations/migration-manager.js';
-import { parseDatabaseConfig, getPoolConfig } from '../utils/database-config.js';
+import { getPoolConfig, parseDatabaseConfig } from '../utils/database-config.js';
 
 async function main(): Promise<void> {
     const command = process.argv[2];
@@ -32,7 +32,9 @@ Examples:
 
     const dbConfig = parseDatabaseConfig();
 
-    console.log(`🔗 Connecting to database: ${dbConfig.user}@${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`);
+    console.log(
+        `🔗 Connecting to database: ${dbConfig.user}@${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`
+    );
 
     try {
         switch (command) {
@@ -67,7 +69,7 @@ Examples:
 
 async function createDatabase(): Promise<void> {
     const poolConfig = getPoolConfig();
-    
+
     // For database creation, we need to connect to the 'postgres' database
     // If using connectionString, we need to modify it to point to 'postgres' database
     let adminPoolConfig;
@@ -89,7 +91,7 @@ async function createDatabase(): Promise<void> {
     try {
         // Get the target database name
         const dbConfig = parseDatabaseConfig();
-        
+
         // Check if database exists
         const result = await adminPool.query('SELECT 1 FROM pg_database WHERE datname = $1', [
             dbConfig.database,

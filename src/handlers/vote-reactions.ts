@@ -83,7 +83,7 @@ export async function handleVoteReactionAdd(
         if (emojiName === '👍') {
             const guild = message.guild;
             if (!guild) return;
-            
+
             // Ensure user exists in database before adding reaction
             await voteManager.ensureUserExists(user);
             const weight = await getVoteWeight(guild, user.id);
@@ -100,7 +100,7 @@ export async function handleVoteReactionAdd(
         } else if (emojiName === '👎') {
             const guild = message.guild;
             if (!guild) return;
-            
+
             // Ensure user exists in database before adding reaction
             await voteManager.ensureUserExists(user);
             const weight = await getVoteWeight(guild, user.id);

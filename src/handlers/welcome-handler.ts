@@ -37,7 +37,9 @@ export async function handleMemberJoin(
 
         // Update the welcome data with the message ID
         console.log(`🔧 Updating welcome request ${welcomeData.id} with messageId: ${message.id}`);
-        const updateSuccess = await welcomeManager.updateWelcomeRequest(welcomeData.id, { messageId: message.id });
+        const updateSuccess = await welcomeManager.updateWelcomeRequest(welcomeData.id, {
+            messageId: message.id,
+        });
         console.log(`🔧 MessageId update success: ${updateSuccess}`);
 
         console.log(`Welcome message sent for user ${member.user.username} (${member.id})`);

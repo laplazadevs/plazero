@@ -113,7 +113,10 @@ export class WelcomeRepository {
 
         console.log(`🔧 Updating welcome request with query:`, query);
         console.log(`🔧 Update values:`, values);
-        console.log(`🔧 Update fields:`, Object.keys(updates).filter(key => updates[key as keyof typeof updates] !== undefined));
+        console.log(
+            `🔧 Update fields:`,
+            Object.keys(updates).filter(key => updates[key as keyof typeof updates] !== undefined)
+        );
 
         const result = await this.db.query(query, values);
         const success = result.rows.length > 0;

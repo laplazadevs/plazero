@@ -18,7 +18,7 @@ export interface PoolConfig {
 export function parseDatabaseConfig(): DatabaseConfig {
     // Check if DATABASE_URL is provided (common in production environments)
     const databaseUrl = process.env.DATABASE_URL;
-    
+
     if (databaseUrl) {
         try {
             const url = new URL(databaseUrl);
@@ -30,10 +30,12 @@ export function parseDatabaseConfig(): DatabaseConfig {
                 password: url.password,
             };
         } catch (error) {
-            console.warn('⚠️ Failed to parse DATABASE_URL, falling back to individual environment variables');
+            console.warn(
+                '⚠️ Failed to parse DATABASE_URL, falling back to individual environment variables'
+            );
         }
     }
-    
+
     // Fallback to individual environment variables
     return {
         host: process.env.DB_HOST || 'localhost',
@@ -51,7 +53,7 @@ export function getPoolConfig(): PoolConfig {
             connectionString: process.env.DATABASE_URL,
         };
     }
-    
+
     // Fallback to individual environment variables
     return {
         host: process.env.DB_HOST || 'localhost',

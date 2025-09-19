@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
 
-import { parseDatabaseConfig, getPoolConfig } from '../utils/database-config.js';
+import { getPoolConfig, parseDatabaseConfig } from '../utils/database-config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -61,7 +61,7 @@ export class MigrationManager {
 
     public async ensureDatabaseExists(): Promise<void> {
         const poolConfig = getPoolConfig();
-        
+
         // For database creation, we need to connect to the 'postgres' database
         // If using connectionString, we need to modify it to point to 'postgres' database
         let adminPoolConfig;
@@ -83,7 +83,7 @@ export class MigrationManager {
         try {
             // Get the target database name
             const dbConfig = parseDatabaseConfig();
-            
+
             // Check if database exists
             const result = await adminPool.query('SELECT 1 FROM pg_database WHERE datname = $1', [
                 dbConfig.database,

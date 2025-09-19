@@ -69,7 +69,7 @@ setInterval(async () => {
     try {
         const activeVotes = await voteManager.getAllActiveVotes();
         const now = new Date();
-        
+
         for (const vote of activeVotes) {
             const timeElapsed = now.getTime() - vote.startTime.getTime();
             if (timeElapsed >= VOTE_DURATION_MS) {
@@ -226,6 +226,23 @@ client.on(Events.GuildMemberAdd, async member => {
 // Handle messages for welcome information collection
 client.on(Events.MessageCreate, async message => {
     await handleWelcomeMessage(message, welcomeManager);
+});
+
+// Handle message edits for welcome information collection
+client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
+    if (newMessage.partial) {
+        try {
+            await newMessage.fetch();
+        } catch (error) {
+            console.error('Failed to fetch partial message:', error);
+            return;
+        }
+    }
+
+    // Only handle full messages with content
+    if (!newMessage.content) return;
+
+    await handleWelcomeMessage(newMessage, welcomeManager);
 });
 
 // Graceful shutdown

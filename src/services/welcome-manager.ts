@@ -33,10 +33,10 @@ export class WelcomeManager {
 
     async getWelcomeRequest(id: string): Promise<WelcomeData | undefined> {
         console.log(`🔧 WelcomeManager.getWelcomeRequest called with id:`, id);
-        
+
         const requestData = await this.welcomeRepo.getWelcomeRequest(id);
         console.log(`🔧 Retrieved requestData from repository:`, requestData);
-        
+
         if (!requestData) {
             console.log(`🔧 No request data found for id:`, id);
             return undefined;
@@ -67,7 +67,7 @@ export class WelcomeManager {
 
     async updateWelcomeRequest(id: string, updates: Partial<WelcomeData>): Promise<boolean> {
         console.log(`🔧 WelcomeManager.updateWelcomeRequest called with:`, { id, updates });
-        
+
         const dbUpdates: any = {};
 
         if (updates.linkedinUrl !== undefined) {

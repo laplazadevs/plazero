@@ -1,5 +1,5 @@
 import { Guild } from 'discord.js';
-import { randomUUID } from 'crypto';
+import { randomUUID } from 'node:crypto';
 
 import { SERVER_BOOSTER_ROLE_NAME } from '../config/constants.js';
 
