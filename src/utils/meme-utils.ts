@@ -68,13 +68,25 @@ export function getWeekPeriodString(startDate: dayjs.Dayjs, endDate: dayjs.Dayjs
 }
 
 /**
- * Get the last Friday at noon in Bogota timezone
+ * Get the current week's Friday at noon in Bogota timezone
+ */
+export function getCurrentFridayAtNoon(): dayjs.Dayjs {
+    const now = dayjs().tz('America/Bogota');
+    let friday = now.day(5).hour(12).minute(0).second(0).millisecond(0);
+
+    // If today is past Friday, we need to get this week's Friday (which already passed)
+    // If today is before Friday, we get this week's Friday (which is coming)
+    // If today is Friday but before noon, we get today's noon
+    // If today is Friday and past noon, we get today's noon (but it already passed)
+
+    return friday;
+}
+
+/**
+ * Get the last Friday at noon in Bogota timezone (previous week's Friday)
  */
 export function getLastFridayAtNoon(): dayjs.Dayjs {
-    const now = dayjs().tz('America/Bogota');
-    let lastFriday = now.day(5).hour(12).minute(0).second(0).millisecond(0);
-    lastFriday = lastFriday.subtract(1, 'week');
-    return lastFriday;
+    return getCurrentFridayAtNoon().subtract(1, 'week');
 }
 
 /**
@@ -84,8 +96,8 @@ export function getNextFridayAtNoon(): dayjs.Dayjs {
     const now = dayjs().tz('America/Bogota');
     let nextFriday = now.day(5).hour(12).minute(0).second(0).millisecond(0);
 
-    // If it's already Friday and past noon, get next week's Friday
-    if (now.day() === 5 && now.hour() >= 12) {
+    // If it's already Friday and past noon, or if it's past Friday, get next week's Friday
+    if ((now.day() === 5 && now.hour() >= 12) || now.day() > 5) {
         nextFriday = nextFriday.add(1, 'week');
     }
 

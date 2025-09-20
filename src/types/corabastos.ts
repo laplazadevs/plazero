@@ -33,7 +33,7 @@ export interface CorabastosEmergencyRequest {
     id: string;
     requestedBy: User;
     reason: string;
-    description?: string;
+    paciente: User;
     status: 'pending' | 'approved' | 'rejected' | 'cancelled';
     confirmationMessageId?: string;
     confirmationsNeeded: number;
@@ -95,7 +95,7 @@ export interface CorabastosEmergencyRequestData {
     id: string;
     requested_by_id: string;
     reason: string;
-    description?: string;
+    paciente_id: string;
     status: 'pending' | 'approved' | 'rejected' | 'cancelled';
     confirmation_message_id?: string;
     confirmations_needed: number;
@@ -132,7 +132,7 @@ export interface AgendaAddParams {
 
 export interface EmergencyRequestParams {
     reason: string;
-    description?: string;
+    paciente: User;
 }
 
 export interface CorabastosStats {

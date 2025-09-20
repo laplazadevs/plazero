@@ -156,7 +156,7 @@ export async function handleCorabastosEmergencyCommand(
     corabastosManager: CorabastosManager
 ): Promise<void> {
     const reason = interaction.options.getString('razon', true);
-    const description = interaction.options.getString('descripcion', false);
+    const paciente = interaction.options.getUser('paciente', true);
 
     // Validate reason length
     if (reason.length > 300) {
@@ -174,14 +174,14 @@ export async function handleCorabastosEmergencyCommand(
         const emergencyRequest = await corabastosManager.createEmergencyRequest(
             interaction.user,
             reason,
-            description || undefined
+            paciente
         );
 
         // Create emergency request embed
         const embed = createEmergencyRequestEmbed(
             interaction.user,
             reason,
-            description || undefined,
+            paciente,
             CORABASTOS_EMERGENCY_CONFIRMATIONS_NEEDED
         );
 

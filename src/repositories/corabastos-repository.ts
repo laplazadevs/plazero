@@ -198,17 +198,18 @@ export class CorabastosRepository {
     public async createEmergencyRequest(
         user: User,
         reason: string,
-        description?: string
+        paciente: User
     ): Promise<CorabastosEmergencyRequestData> {
         return await this.db.transaction(async client => {
             await this.userRepo.upsertUser(user);
+            await this.userRepo.upsertUser(paciente);
 
             const requestId = uuidv4();
             const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2 hours from now
 
             const query = `
                 INSERT INTO corabastos_emergency_requests (
-                    id, requested_by_id, reason, description, expires_at, 
+                    id, requested_by_id, reason, paciente_id, expires_at, 
                     created_at, updated_at
                 )
                 VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
@@ -219,7 +220,7 @@ export class CorabastosRepository {
                 requestId,
                 user.id,
                 reason,
-                description,
+                paciente.id,
                 expiresAt,
             ]);
             return result.rows[0];
@@ -273,6 +274,16 @@ export class CorabastosRepository {
 
             return true;
         });
+    }
+
+    public async hasPacienteConfirmed(requestId: string, pacienteId: string): Promise<boolean> {
+        const query = `
+            SELECT COUNT(*) as count 
+            FROM corabastos_emergency_confirmations 
+            WHERE request_id = $1 AND user_id = $2
+        `;
+        const result = await this.db.query(query, [requestId, pacienteId]);
+        return parseInt(result.rows[0].count) > 0;
     }
 
     public async getEmergencyRequest(

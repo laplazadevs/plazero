@@ -16,7 +16,7 @@ The Corabastos feature is a comprehensive Discord bot system for managing weekly
 -   **Turno 0**: 12:00 PM (noon) - Starting time
 -   **Turno 1**: 1:00 PM
 -   **Turno 2**: 2:00 PM
--   ...and so on up to **Turno 8**: 8:00 PM
+-   ...and so on up to **Turno 10**: 10:00 PM
 
 ### Agenda Management
 
@@ -48,7 +48,7 @@ Adds a topic to the corabastos agenda for the current week.
 
 1. User submits command
 2. Bot shows confirmation embed with details
-3. User has 30 seconds to confirm or cancel
+3. User has 1 minute to confirm or cancel
 4. On confirmation, topic is added to agenda
 5. Warning displayed about attendance responsibility
 
@@ -112,27 +112,6 @@ Records user confirmations for emergency requests.
 
 Optional attendance tracking for analytics.
 
-## Architecture
-
-### Repository Layer (`CorabastosRepository`)
-
--   Handles all database operations
--   Manages transactions for data consistency
--   Provides cleanup operations for expired requests
-
-### Service Layer (`CorabastosManager`)
-
--   Business logic and coordination
--   Validates input and enforces rules
--   Manages session creation and agenda operations
--   Handles emergency request workflows
-
-### Handler Layer
-
--   **Commands**: Process slash command interactions
--   **Interactions**: Handle button clicks and reactions
--   **Embeds**: Create rich Discord embeds for responses
-
 ## Configuration
 
 Constants defined in `constants.ts`:
@@ -142,104 +121,6 @@ Constants defined in `constants.ts`:
 -   `CORABASTOS_EMERGENCY_EXPIRY_HOURS`: Request expiry time (2 hours)
 -   `CORABASTOS_MAX_TURNO`: Maximum turno number (8)
 -   `CORABASTOS_CONFIRMATION_TIMEOUT_MS`: Button timeout (30 seconds)
-
-## User Experience
-
-### Adding Agenda Items
-
-1. User runs `/corabastos-agenda agregar`
-2. Selects turno and provides topic
-3. Sees confirmation embed with warning about attendance
-4. Clicks ✅ to confirm or ❌ to cancel
-5. Receives success confirmation with agenda details
-6. Warned about community consequences for no-shows
-
-### Emergency Requests
-
-1. User runs `/corabastos-emergencia` with reason
-2. Bot posts public confirmation request
-3. Community members react with ✅ (up to 10 needed)
-4. Real-time counter shows progress
-5. Auto-approval when threshold reached
-6. @everyone announcement in general channel
-
-### Viewing Agenda
-
-1. User runs `/corabastos-agenda ver`
-2. Sees organized list by turno
-3. Visual indicators for confirmation status
-4. Clear week date range displayed
-
-## Error Handling
-
-### Validation
-
--   Turno range validation (0-8)
--   Text length limits enforced
--   Duplicate topic prevention
--   User permission checks
-
-### Edge Cases
-
--   Expired emergency requests auto-rejected
--   Button timeouts handled gracefully
--   Database connection failures logged
--   Partial data fetching in Discord API
-
-## Security & Permissions
-
-### Public Commands
-
--   All corabastos commands available to all users
--   No special role requirements for basic functionality
-
-### Emergency Rejections
-
--   Only admins/moderators can manually reject emergency requests
--   Automatic expiry prevents abuse
-
-### Data Protection
-
--   User IDs stored, not sensitive data
--   Agenda items can be cancelled by submitters
--   Emergency requests tracked for accountability
-
-## Integration
-
-### Discord Features
-
--   Slash commands with autocomplete
--   Rich embeds with dynamic content
--   Button interactions for confirmations
--   Reaction-based voting system
--   @everyone mentions for announcements
-
-### Channel Management
-
--   Auto-detects "corabastos" voice channel
--   Posts announcements to "general" channel
--   Respects channel permissions
-
-### Time Zone Support
-
--   All times in America/Bogota timezone
--   Week calculations based on Monday start
--   Friday scheduling logic
-
-## Monitoring & Cleanup
-
-### Automatic Cleanup
-
--   Expired emergency requests cleaned every 30 minutes
--   Old completed sessions archived after 90 days
--   Failed confirmations auto-expire
-
-### Statistics Tracking
-
--   Total sessions created
--   Agenda items submitted
--   Emergency requests processed
--   User participation metrics
 
 ## Future Enhancements
 
@@ -261,50 +142,3 @@ Constants defined in `constants.ts`:
 -   Agenda item voting/prioritization
 -   Integration with calendar systems
 -   Multi-week agenda planning
-
-## Troubleshooting
-
-### Common Issues
-
-1. **"Invalid turno"**: Check range (0-8)
-2. **"Duplicate topic"**: User already has similar topic in same turno
-3. **"No session found"**: No corabastos scheduled for current week
-4. **"Emergency request exists"**: User already has pending emergency request
-
-### Admin Actions
-
--   Check `/corabastos-estado` for system overview
--   Monitor database for orphaned records
--   Review emergency confirmation patterns
--   Ensure cleanup tasks are running
-
-### Database Issues
-
--   Run migration to create/update schema
--   Check connection configuration
--   Verify table indexes for performance
--   Monitor cleanup job execution
-
-## Best Practices
-
-### For Users
-
--   Be specific in topic descriptions
--   Confirm attendance when adding agenda items
--   Use emergency requests responsibly
--   Participate in community confirmations
-
-### For Administrators
-
--   Monitor emergency request patterns
--   Encourage responsible agenda usage
--   Ensure voice channels are properly configured
--   Review system statistics regularly
-
-### For Developers
-
--   Follow existing code patterns
--   Add proper error handling
--   Include comprehensive logging
--   Write tests for critical paths
--   Document configuration changes

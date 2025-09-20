@@ -3,7 +3,14 @@ import dayjs from 'dayjs';
 import isBetween from 'dayjs/plugin/isBetween.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
-import { BaseMessageOptions, Client, Events, GatewayIntentBits, Message, TextChannel } from 'discord.js';
+import {
+    BaseMessageOptions,
+    Client,
+    Events,
+    GatewayIntentBits,
+    Message,
+    TextChannel,
+} from 'discord.js';
 
 // Import our modular services
 import {
@@ -29,6 +36,7 @@ import {
     handleCorabastosReactionAdd,
     handleCorabastosReactionRemove,
 } from './handlers/corabastos-interactions.js';
+import { handleMemberLeave } from './handlers/departure-handler.js';
 import {
     handleGetTopCommand,
     handleMemeContestCommand,
@@ -260,6 +268,11 @@ client.on(Events.GuildMemberAdd, async member => {
     await handleMemberJoin(member, welcomeManager);
 });
 
+// Handle member departures
+client.on(Events.GuildMemberRemove, async member => {
+    await handleMemberLeave(member);
+});
+
 // Handle messages for welcome information collection
 client.on(Events.MessageCreate, async message => {
     await handleWelcomeMessage(message, welcomeManager);
@@ -268,7 +281,7 @@ client.on(Events.MessageCreate, async message => {
 // Handle message edits for welcome information collection
 client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
     let fullMessage: Message;
-    
+
     if (newMessage.partial) {
         try {
             fullMessage = await newMessage.fetch();

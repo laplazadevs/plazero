@@ -10,7 +10,11 @@ import {
     createYearlyWinnersEmbed,
 } from '../services/meme-embed.js';
 import { MemeManager } from '../services/meme-manager.js';
-import { getNextFridayAtNoon, isValidContestDateRange } from '../utils/meme-utils.js';
+import {
+    getCurrentFridayAtNoon,
+    getNextFridayAtNoon,
+    isValidContestDateRange,
+} from '../utils/meme-utils.js';
 
 export async function handleGetTopCommand(
     interaction: ChatInputCommandInteraction,
@@ -330,7 +334,8 @@ export async function handleMemeContestCommand(
         let endDate: Date;
 
         if (contestType === 'weekly') {
-            startDate = getLastFridayAtNoon().toDate();
+            // Use current Friday-to-Friday period
+            startDate = getCurrentFridayAtNoon().toDate();
             endDate = getNextFridayAtNoon().toDate();
         } else {
             // Yearly contest
@@ -393,9 +398,7 @@ export async function handleMemeContestCommand(
         });
 
         // Update contest with message ID
-        contest.messageId = message.id;
-        // Note: We would need to add a method to update the message ID in the database
-        // For now, this is kept for compatibility
+        await memeManager.updateContestMessageId(contest.id, message.id);
 
         await interaction.followUp({
             content: `✅ Concurso de memes creado exitosamente! ID: \`${contest.id}\``,

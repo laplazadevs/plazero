@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
@@ -25,39 +25,52 @@ export class MigrationManager {
     }
 
     private loadMigrations(): void {
-        // Load migration files from the migrations directory
-        const migrationFiles = [
-            '001_initial_schema.sql',
-            '002_cleanup_functions.sql',
-            '003_indexes.sql',
-            '004_corabastos_schema.sql',
-        ];
+        try {
+            // Dynamically read all SQL files from the migrations directory
+            const files = readdirSync(__dirname);
+            const migrationFiles = files
+                .filter(file => file.endsWith('.sql') && /^\d+_/.test(file))
+                .sort(); // Sort alphabetically to ensure proper order
 
-        for (const file of migrationFiles) {
-            try {
-                const migrationPath = join(__dirname, file);
-                const content = readFileSync(migrationPath, 'utf-8');
-                const version = parseInt(file.split('_')[0]);
-                const name = file.replace('.sql', '').replace(/^\d+_/, '');
+            console.log(`📁 Found ${migrationFiles.length} migration files:`, migrationFiles);
 
-                // Split content into up and down migrations
-                const parts = content.split('-- DOWN MIGRATION');
-                const up = parts[0].replace('-- UP MIGRATION', '').trim();
-                const down = parts[1] ? parts[1].trim() : '';
+            for (const file of migrationFiles) {
+                try {
+                    const migrationPath = join(__dirname, file);
+                    const content = readFileSync(migrationPath, 'utf-8');
+                    const version = parseInt(file.split('_')[0]);
+                    const name = file.replace('.sql', '').replace(/^\d+_/, '');
 
-                this.migrations.push({
-                    version,
-                    name,
-                    up,
-                    down,
-                });
-            } catch (error) {
-                console.warn(`Could not load migration ${file}:`, error);
+                    // Validate version number
+                    if (isNaN(version)) {
+                        console.warn(`Skipping ${file}: Invalid version number`);
+                        continue;
+                    }
+
+                    // Split content into up and down migrations
+                    const parts = content.split('-- DOWN MIGRATION');
+                    const up = parts[0].replace('-- UP MIGRATION', '').trim();
+                    const down = parts[1] ? parts[1].trim() : '';
+
+                    this.migrations.push({
+                        version,
+                        name,
+                        up,
+                        down,
+                    });
+                } catch (error) {
+                    console.warn(`Could not load migration ${file}:`, error);
+                }
             }
-        }
 
-        // Sort migrations by version
-        this.migrations.sort((a, b) => a.version - b.version);
+            // Sort migrations by version to ensure proper execution order
+            this.migrations.sort((a, b) => a.version - b.version);
+
+            console.log(`✅ Loaded ${this.migrations.length} migrations successfully`);
+        } catch (error) {
+            console.error('Error reading migrations directory:', error);
+            throw error;
+        }
     }
 
     public async ensureDatabaseExists(): Promise<void> {

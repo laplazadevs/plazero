@@ -37,6 +37,7 @@ export const WELCOME_ROLE_NAME = 'One Of Us';
 export const MEME_CHANNEL_NAME = '🤣︱memes';
 export const CORABASTOS_VOICE_CHANNEL_NAME = '🇨🇴︱corabastos';
 export const GENERAL_CHANNEL_NAME = '🗿︱general';
+export const ADMINISTRATION_CHANNEL_NAME = '🐵︱administración';
 
 // Vote thresholds and corresponding timeout durations
 export const VOTE_THRESHOLDS: VoteThreshold[] = [
@@ -51,9 +52,9 @@ export const VOTE_THRESHOLDS: VoteThreshold[] = [
 // Corabastos configuration
 export const CORABASTOS_FRIDAY_HOUR = 12; // 12 PM (noon)
 export const CORABASTOS_EMERGENCY_CONFIRMATIONS_NEEDED = 10;
-export const CORABASTOS_EMERGENCY_EXPIRY_HOURS = 1; // Emergency requests expire after 2 hours
-export const CORABASTOS_MAX_TURNO = 10; // Maximum turno (8 PM)
-export const CORABASTOS_CONFIRMATION_TIMEOUT_MS = 30 * 1000; // 30 seconds for agenda confirmations
+export const CORABASTOS_EMERGENCY_EXPIRY_HOURS = 1; // Emergency requests expire after 1 hours
+export const CORABASTOS_MAX_TURNO = 10; // Maximum turno (10 PM)
+export const CORABASTOS_CONFIRMATION_TIMEOUT_MS = 60 * 1000; // 60 seconds for agenda confirmations
 
 // Corabastos emojis
 export const CORABASTOS_CONFIRM_EMOJI = '✅';

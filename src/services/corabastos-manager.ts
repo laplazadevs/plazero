@@ -137,7 +137,7 @@ export class CorabastosManager {
     public async createEmergencyRequest(
         user: User,
         reason: string,
-        description?: string
+        paciente: User
     ): Promise<CorabastosEmergencyRequest> {
         // Check if user has pending emergency requests
         const pendingRequests = await this.repository.getPendingEmergencyRequests();
@@ -147,7 +147,7 @@ export class CorabastosManager {
             throw new Error('Ya tienes una solicitud de corabastos de emergencia pendiente.');
         }
 
-        const requestData = await this.repository.createEmergencyRequest(user, reason, description);
+        const requestData = await this.repository.createEmergencyRequest(user, reason, paciente);
         return this.mapEmergencyRequestDataToRequest(requestData);
     }
 
@@ -173,18 +173,28 @@ export class CorabastosManager {
         isApproved: boolean;
         confirmationsReceived: number;
         confirmationsNeeded: number;
+        pacienteConfirmed: boolean;
     }> {
         const request = await this.getEmergencyRequest(requestId);
         if (!request) {
             throw new Error('Solicitud de emergencia no encontrada.');
         }
 
-        const isApproved = request.confirmationsReceived >= request.confirmationsNeeded;
+        // Check if the paciente has confirmed
+        const pacienteConfirmed = await this.repository.hasPacienteConfirmed(
+            requestId,
+            request.paciente.id
+        );
+
+        // Both conditions must be met: enough confirmations AND paciente confirmed
+        const isApproved =
+            request.confirmationsReceived >= request.confirmationsNeeded && pacienteConfirmed;
 
         return {
             isApproved,
             confirmationsReceived: request.confirmationsReceived,
             confirmationsNeeded: request.confirmationsNeeded,
+            pacienteConfirmed,
         };
     }
 
@@ -289,7 +299,7 @@ export class CorabastosManager {
             id: data.id,
             requestedBy: { id: data.requested_by_id } as User, // Minimal user object
             reason: data.reason,
-            description: data.description,
+            paciente: { id: data.paciente_id } as User, // Minimal user object
             status: data.status,
             confirmationMessageId: data.confirmation_message_id,
             confirmationsNeeded: data.confirmations_needed,

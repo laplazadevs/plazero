@@ -62,6 +62,10 @@ export class MemeManager {
         return result;
     }
 
+    async updateContestMessageId(contestId: string, messageId: string): Promise<void> {
+        await this.memeRepo.updateContestMessageId(contestId, messageId);
+    }
+
     async completeContest(contestId: string, winners: MemeData[]): Promise<boolean> {
         const contest = await this.getContest(contestId);
         if (!contest || contest.status !== 'active') return false;

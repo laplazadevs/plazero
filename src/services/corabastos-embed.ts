@@ -140,7 +140,7 @@ export function createAgendaDisplayEmbed(
     for (const turno of sortedTurnos) {
         const items = itemsByTurno[turno];
         const itemsText = items
-            .map((item) => {
+            .map(item => {
                 const status = item.status === 'confirmed' ? '✅' : '⏳';
                 return `${status} **${item.user.displayName}**: ${item.topic}`;
             })
@@ -160,25 +160,29 @@ export function createAgendaDisplayEmbed(
 export function createEmergencyRequestEmbed(
     user: User,
     reason: string,
-    description?: string,
+    paciente: User,
     confirmationsNeeded: number = 10
 ): EmbedBuilder {
     const embed = new EmbedBuilder()
         .setTitle(`${CORABASTOS_EMERGENCY_EMOJI} Corabastos de Emergencia`)
         .setDescription(
             `**${user.displayName}** está solicitando un corabastos de emergencia.\n\n` +
-                `Se necesitan **${confirmationsNeeded} confirmaciones** de la comunidad para proceder.`
+                `Se necesitan **${confirmationsNeeded} confirmaciones** de la comunidad para proceder.\n\n` +
+                `**⚠️ IMPORTANTE:** ${paciente.displayName} debe confirmar su participación para que la solicitud sea válida.`
         )
-        .addFields({ name: '🚨 Razón', value: reason, inline: false })
+        .addFields(
+            { name: '🚨 Razón', value: reason, inline: false },
+            {
+                name: '👤 Paciente',
+                value: `${paciente.displayName} (${paciente.username})`,
+                inline: true,
+            }
+        )
         .setColor(0xff6600)
         .setFooter({
             text: `Reacciona con ${CORABASTOS_CONFIRM_EMOJI} para confirmar o ${CORABASTOS_CANCEL_EMOJI} para rechazar`,
         })
         .setTimestamp();
-
-    if (description) {
-        embed.addFields({ name: '📄 Descripción', value: description, inline: false });
-    }
 
     return embed;
 }
@@ -186,6 +190,7 @@ export function createEmergencyRequestEmbed(
 export function createEmergencyApprovedEmbed(
     originalUser: User,
     reason: string,
+    paciente: User,
     confirmationsReceived: number
 ): EmbedBuilder {
     return new EmbedBuilder()
@@ -194,7 +199,14 @@ export function createEmergencyApprovedEmbed(
             `El corabastos de emergencia solicitado por **${originalUser.displayName}** ha sido aprobado.\n\n` +
                 `**@everyone** Se convoca un corabastos de emergencia. Únanse al canal de voz corabastos para discutir:`
         )
-        .addFields({ name: '🚨 Tema', value: reason, inline: false })
+        .addFields(
+            { name: '🚨 Tema', value: reason, inline: false },
+            {
+                name: '👤 Liderado por',
+                value: `${paciente.displayName} (${paciente.username})`,
+                inline: true,
+            }
+        )
         .setColor(0x00ff00)
         .setFooter({
             text: `Aprobado con ${confirmationsReceived} confirmaciones de la comunidad`,

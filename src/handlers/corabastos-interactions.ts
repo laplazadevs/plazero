@@ -8,10 +8,7 @@ import {
     User,
 } from 'discord.js';
 
-import {
-    CORABASTOS_CANCEL_EMOJI,
-    CORABASTOS_CONFIRM_EMOJI,
-} from '../config/constants.js';
+import { CORABASTOS_CANCEL_EMOJI, CORABASTOS_CONFIRM_EMOJI } from '../config/constants.js';
 import {
     createAgendaCancelledEmbed,
     createAgendaSuccessEmbed,
@@ -240,6 +237,7 @@ async function handleEmergencyConfirmation(
             const approvalEmbed = createEmergencyApprovedEmbed(
                 emergencyRequest.requestedBy,
                 emergencyRequest.reason,
+                emergencyRequest.paciente,
                 approvalStatus.confirmationsReceived
             );
 

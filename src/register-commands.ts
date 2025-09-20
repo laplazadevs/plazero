@@ -114,12 +114,11 @@ const commands = [
                 .setRequired(true)
                 .setMaxLength(300)
         )
-        .addStringOption(option =>
+        .addUserOption(option =>
             option
-                .setName('descripcion')
-                .setDescription('Descripción detallada de la emergencia')
-                .setRequired(false)
-                .setMaxLength(500)
+                .setName('paciente')
+                .setDescription('Usuario que va a liderar el tema de la emergencia')
+                .setRequired(true)
         ),
     new SlashCommandBuilder()
         .setName('corabastos-estado')
