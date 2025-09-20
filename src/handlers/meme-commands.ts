@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import { ChatInputCommandInteraction, PermissionFlagsBits, TextChannel } from 'discord.js';
 
-import { MEME_CHANNEL_NAME } from '../config/constants.js';
+import { LAUGH_EMOJIS, MEME_CHANNEL_NAME } from '../config/constants.js';
 import {
     createMemeContestButtonRow,
     createMemeContestEmbed,
@@ -127,19 +127,13 @@ export async function handleMemeOfTheYearCommand(
     await interaction.deferReply();
 
     try {
-        // Create yearly contest
-        const startDate = dayjs.tz('2024-01-01', 'America/Bogota').startOf('day');
-        const endDate = dayjs.tz('2024-12-31', 'America/Bogota').endOf('day');
+        // Get current year and date
+        const now = dayjs().tz('America/Bogota');
+        const currentYear = now.year();
+        const startDate = dayjs.tz(`${currentYear}-01-01`, 'America/Bogota').startOf('day');
+        const endDate = now; // Use current date instead of end of year
 
-        const contest = await memeManager.createContest(
-            'yearly',
-            startDate.toDate(),
-            endDate.toDate(),
-            interaction.channelId,
-            interaction.user
-        );
-
-        // Process messages for the year
+        // Process messages for the year up to current date
         const channel = interaction.client.channels.cache.find(
             ch => ch.isTextBased() && (ch as TextChannel).name === MEME_CHANNEL_NAME
         ) as TextChannel;
@@ -149,24 +143,16 @@ export async function handleMemeOfTheYearCommand(
         }
 
         const messages = await fetchMessagesInRange(channel, startDate, endDate);
-        const winners = await getTopMessages(messages, [
-            '🤣',
-            '😂',
-            '🥇',
-            '956966036354265180',
-            '974777892418519081',
-            '954075635310035024',
-            '956966037063106580',
-        ]);
+        const winners = await getTopMessages(messages, LAUGH_EMOJIS);
 
         if (winners.length === 0) {
-            await interaction.editReply('No se encontraron memes para el año 2024 😢');
+            await interaction.editReply(`No se encontraron memes para el año ${currentYear} 😢`);
             return;
         }
 
-        // Create meme data for winners
+        // Create meme data for winners (no need to create contest, just display results)
         const yearlyWinners = winners.map((winner, index) => ({
-            id: `yearly-${contest.id}-${index}`,
+            id: `yearly-display-${index}`,
             message: winner.message,
             author: winner.message.author,
             reactionCount: winner.count,
@@ -177,14 +163,8 @@ export async function handleMemeOfTheYearCommand(
             submittedAt: winner.message.createdAt,
         }));
 
-        // Add winners to contest and complete it
-        yearlyWinners.forEach(winner => {
-            memeManager.addMemeToContest(contest.id, winner);
-        });
-        await memeManager.completeContest(contest.id, yearlyWinners);
-
-        // Announce winners
-        const embed = createYearlyWinnersEmbed(yearlyWinners);
+        // Create and send the embed with current year information
+        const embed = createYearlyWinnersEmbed(yearlyWinners, currentYear, endDate.format('MMMM DD'));
         await interaction.editReply({ embeds: [embed] });
     } catch (error) {
         console.error('Error in handleMemeOfTheYearCommand:', error);

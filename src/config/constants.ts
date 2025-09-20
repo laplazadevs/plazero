@@ -5,17 +5,32 @@ export const LAUGH_EMOJIS = [
     '🤣', // :rofl:
     '😂', // :joy:
     '🥇', // :first_place:
+    '🏅', // :medal:
+    '🏆', // :trophy:
+    '🎖️', // :medal_military:
+    '💯', // :100:
+    '😄', // :smile:
+    '😁', // :grin:
+    '😀', // :grinning:
+    '🤩', // :star_struck:
+    '😆', // :laugh:
+    '😸', // :cat_laugh:
+    '😹', // :cat_eyes:
     '956966036354265180', // :pepehardlaugh:
     '974777892418519081', // :doggokek:
     '954075635310035024', // :kekw:
     '956966037063106580', // :pepelaugh:
+    '1294664027242365000', // :LMAOO:
+    '1294664038223052823', // :LuffyLike:
+    '1294664055579213907', // :Pogging:
+    '993855474548084827', // :lol:
+    '974777892208787596', // :pepeOK:
 ];
 
 export const BONE_EMOJI = ['🦴'];
 
 // Command names
-export const SCRAP_MESSAGES_COMMAND = 'gettop';
-export const MEME_OF_THE_YEAR_COMMAND = 'memeoftheyear';
+export const MEME_OF_THE_YEAR_COMMAND = 'meme-of-the-year';
 export const MEME_STATS_COMMAND = 'meme-stats';
 export const MEME_CONTEST_COMMAND = 'meme-contest';
 export const VOTE_TIMEOUT_COMMAND = 'vote-timeout';

@@ -18,11 +18,9 @@ import {
     CORABASTOS_AGENDA_COMMAND,
     CORABASTOS_EMERGENCY_COMMAND,
     CORABASTOS_STATUS_COMMAND,
-    MEME_CHANNEL_NAME,
     MEME_CONTEST_COMMAND,
     MEME_OF_THE_YEAR_COMMAND,
     MEME_STATS_COMMAND,
-    SCRAP_MESSAGES_COMMAND,
     VOTE_DURATION_MS,
     VOTE_TIMEOUT_COMMAND,
 } from './config/constants.js';
@@ -38,7 +36,6 @@ import {
 } from './handlers/corabastos-interactions.js';
 import { handleMemberLeave } from './handlers/departure-handler.js';
 import {
-    handleGetTopCommand,
     handleMemeContestCommand,
     handleMemeOfTheYearCommand,
     handleMemeStatsCommand,
@@ -135,48 +132,24 @@ initializeBot();
 client.once('ready', () => {
     console.log('Bot is ready!');
 
-    // Schedule the command to run every Friday at 11:40 AM Bogota time
-    const job = new CronJob(
-        '40 11 * * 5', // cronTime
+    // Note: Automatic weekly contest creation/processing is handled by the contest system
+
+    // Schedule contest completion check every hour
+    const contestCompletionJob = new CronJob(
+        '0 * * * *', // Every hour at minute 0
         async () => {
-            // onTick
-            console.log('Running scheduled gettop command...');
-            const guild = client.guilds.cache.first();
-            if (!guild) return;
-
-            const channel = guild.channels.cache.find(
-                ch => ch.isTextBased() && (ch as TextChannel).name === MEME_CHANNEL_NAME
-            ) as TextChannel;
-            if (!channel) return;
-
+            console.log('Checking for expired contests...');
             try {
-                const fakeInteraction = {
-                    reply: async (msg: string) => {
-                        await channel.send(msg);
-                    },
-                    followUp: async (msg: string | BaseMessageOptions) => {
-                        await channel.send(msg);
-                    },
-                    deferred: false,
-                    replied: false,
-                    editReply: async (msg: string) => {
-                        await channel.send(msg);
-                    },
-                    client: client,
-                    channel: channel,
-                } as any;
-
-                await handleGetTopCommand(fakeInteraction, memeManager);
+                await memeManager.processExpiredContests(client);
             } catch (error) {
-                console.error('Error in scheduled command:', error);
+                console.error('Error processing expired contests:', error);
             }
         },
         null, // onComplete
         true, // start
         'America/Bogota' // timeZone
     );
-
-    job.start();
+    contestCompletionJob.start();
 
     // Run database cleanup every hour
     setInterval(async () => {
@@ -205,9 +178,7 @@ client.once('ready', () => {
 client.on(Events.InteractionCreate, async interaction => {
     try {
         if (interaction.isChatInputCommand()) {
-            if (interaction.commandName === SCRAP_MESSAGES_COMMAND) {
-                await handleGetTopCommand(interaction, memeManager);
-            } else if (interaction.commandName === MEME_OF_THE_YEAR_COMMAND) {
+            if (interaction.commandName === MEME_OF_THE_YEAR_COMMAND) {
                 await handleMemeOfTheYearCommand(interaction, memeManager);
             } else if (interaction.commandName === MEME_STATS_COMMAND) {
                 await handleMemeStatsCommand(interaction, memeManager);

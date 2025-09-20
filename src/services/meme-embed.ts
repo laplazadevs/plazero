@@ -62,11 +62,18 @@ export function createMemeWinnersEmbed(
     return embed;
 }
 
-export function createYearlyWinnersEmbed(winners: MemeData[]): EmbedBuilder {
-    let description = `🏆 **LOS MEJORES MEMES DEL 2024** 🏆\n\n`;
+export function createYearlyWinnersEmbed(
+    winners: MemeData[], 
+    year?: number, 
+    currentDate?: string
+): EmbedBuilder {
+    const displayYear = year || new Date().getFullYear();
+    const dateInfo = currentDate ? ` (hasta ${currentDate})` : '';
+    
+    let description = `🏆 **LOS MEJORES MEMES DEL ${displayYear}** 🏆\n\n`;
 
     if (winners.length === 0) {
-        description += `No se encontraron memes para el año 2024 😢`;
+        description += `No se encontraron memes para el año ${displayYear} 😢`;
     } else {
         for (const [index, winner] of winners.entries()) {
             const medal = index === 0 ? '👑' : index === 1 ? '🥈' : '🥉';
@@ -76,16 +83,29 @@ export function createYearlyWinnersEmbed(winners: MemeData[]): EmbedBuilder {
             }! Tu meme alcanzó ${winner.reactionCount} reacciones\n`;
             description += `${winnerLink}\n\n`;
         }
-        description += '¡Gracias a todos por otro año lleno de risas! 🎉';
+        
+        if (currentDate) {
+            description += `📊 Resultados del año ${displayYear} hasta la fecha${dateInfo}`;
+        } else {
+            description += '¡Gracias a todos por otro año lleno de risas! 🎉';
+        }
     }
 
+    const title = currentDate 
+        ? `🏆 Top Memes ${displayYear}${dateInfo}`
+        : `🏆 Memes del Año ${displayYear}`;
+        
+    const footerText = currentDate 
+        ? `Resultados actualizados hasta ${currentDate}, ${displayYear}`
+        : 'Concurso anual finalizado';
+
     const embed = new EmbedBuilder()
-        .setTitle('🏆 Memes del Año 2024')
+        .setTitle(title)
         .setDescription(description)
         .setColor(0xffd700)
         .setTimestamp()
         .setFooter({
-            text: 'Concurso anual finalizado',
+            text: footerText,
         });
 
     return embed;

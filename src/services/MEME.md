@@ -86,12 +86,19 @@ The meme competition system has been completely modernized with a modular archit
 /meme-contest yearly 6m        # Create 6-month contest
 ```
 
-## Automated Schedule
+## Automated Processing
 
-The bot automatically runs the weekly competition every **Friday at 11:40 AM (Bogota timezone)**.
+The bot automatically processes expired contests **every hour** and announces winners when contests end.
+
+### Automatic Contest Completion
+
+-   **Hourly Check**: Every hour at minute 0, the bot checks for expired contests
+-   **Winner Processing**: Automatically finds top 3 memes and top 3 bones for expired contests  
+-   **Announcements**: Posts winner announcements in the contest channel
+-   **Database Updates**: Updates user statistics and contest records
 
 ### Timezone Configuration
 
 -   Default timezone: `America/Bogota`
--   Weekly period: Friday 12:00 PM to Friday 12:00 PM
--   Automatic winner announcements
+-   Contest periods are flexible (you define start/end dates)
+-   Winners announced automatically when contests expire

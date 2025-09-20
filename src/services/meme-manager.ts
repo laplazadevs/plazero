@@ -1,6 +1,8 @@
 import { User } from 'discord.js';
 import { v4 as uuidv4 } from 'uuid';
 
+import { BONE_EMOJI, LAUGH_EMOJIS, MEME_CHANNEL_NAME } from '../config/constants.js';
+
 import { MemeRepository } from '../repositories/meme-repository.js';
 import { UserRepository } from '../repositories/user-repository.js';
 import { MemeContest, MemeData, MemeStats } from '../types/meme.js';
@@ -182,6 +184,179 @@ export class MemeManager {
             yearlyWinners: stats.yearlyWinners,
             topContributors,
         };
+    }
+
+    // Automatic contest completion
+    async processExpiredContests(client: any): Promise<void> {
+        const activeContests = await this.getActiveContests();
+        const now = new Date();
+
+        for (const contest of activeContests) {
+            if (contest.endDate <= now) {
+                console.log(`Processing expired contest: ${contest.id}`);
+                
+                try {
+                    // Find the meme channel
+                    const memeChannel = client.channels.cache.find(
+                        (ch: any) => ch.isTextBased() && ch.name === MEME_CHANNEL_NAME
+                    );
+
+                    if (!memeChannel) {
+                        console.warn(`Meme channel not found for contest ${contest.id}`);
+                        continue;
+                    }
+
+                    // Fetch messages from the contest period
+                    const messages = await this.fetchMessagesInRange(
+                        memeChannel,
+                        contest.startDate,
+                        contest.endDate
+                    );
+
+                    if (messages.length === 0) {
+                        console.log(`No messages found for contest ${contest.id}`);
+                        await this.memeRepo.completeContest(contest.id);
+                        continue;
+                    }
+
+                    // Get top memes (laugh reactions)
+                    const topMemes = await this.getTopMessages(messages, LAUGH_EMOJIS);
+
+                    // Get top bones (bone reactions)
+                    const topBones = await this.getTopMessages(messages, BONE_EMOJI);
+
+                    // Create meme winners
+                    const memeWinners = topMemes.map((winner, index) => ({
+                        id: `meme-${contest.id}-${index}`,
+                        message: winner.message,
+                        author: winner.message.author,
+                        reactionCount: winner.count,
+                        contestType: 'meme' as const,
+                        weekStart: contest.startDate,
+                        weekEnd: contest.endDate,
+                        rank: index + 1,
+                        submittedAt: winner.message.createdAt,
+                    }));
+
+                    // Create bone winners
+                    const boneWinners = topBones.map((winner, index) => ({
+                        id: `bone-${contest.id}-${index}`,
+                        message: winner.message,
+                        author: winner.message.author,
+                        reactionCount: winner.count,
+                        contestType: 'bone' as const,
+                        weekStart: contest.startDate,
+                        weekEnd: contest.endDate,
+                        rank: index + 1,
+                        submittedAt: winner.message.createdAt,
+                    }));
+
+                    // Complete the contest with both meme and bone winners
+                    await this.completeContest(contest.id, [...memeWinners, ...boneWinners]);
+
+                    // Announce winners in the contest channel
+                    if (contest.channelId && (memeWinners.length > 0 || boneWinners.length > 0)) {
+                        const contestChannel = client.channels.cache.get(contest.channelId);
+                        if (contestChannel) {
+                            const period = `${new Date(contest.startDate).toLocaleDateString()} - ${new Date(contest.endDate).toLocaleDateString()}`;
+                            
+                            if (memeWinners.length > 0) {
+                                const { createMemeWinnersEmbed } = await import('./meme-embed.js');
+                                const memeEmbed = createMemeWinnersEmbed(memeWinners, 'meme', period);
+                                await contestChannel.send({ embeds: [memeEmbed] });
+                            }
+
+                            if (boneWinners.length > 0) {
+                                const { createMemeWinnersEmbed } = await import('./meme-embed.js');
+                                const boneEmbed = createMemeWinnersEmbed(boneWinners, 'bone', period);
+                                await contestChannel.send({ embeds: [boneEmbed] });
+                            }
+                        }
+                    }
+
+                    console.log(`✅ Contest ${contest.id} completed with ${memeWinners.length} meme winners and ${boneWinners.length} bone winners`);
+                } catch (error) {
+                    console.error(`Error processing contest ${contest.id}:`, error);
+                }
+            }
+        }
+    }
+
+    // Helper methods for automatic processing
+    private async fetchMessagesInRange(channel: any, startDate: Date, endDate: Date): Promise<any[]> {
+        let messages: any[] = [];
+        let lastMessageId: string | undefined;
+        let hasMoreMessages = true;
+        let iteration = 0;
+        const maxIterations = 100; // Safety limit
+
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+
+        while (hasMoreMessages && iteration < maxIterations) {
+            const options: { limit: number; before?: string } = { limit: 100 };
+            if (lastMessageId) options.before = lastMessageId;
+
+            const fetchedMessages = await channel.messages.fetch(options);
+
+            if (fetchedMessages.size === 0) {
+                hasMoreMessages = false;
+                break;
+            }
+
+            const filteredMessages = fetchedMessages.filter((msg: any) => {
+                const msgDate = new Date(msg.createdAt);
+                return msgDate >= start && msgDate <= end;
+            });
+
+            messages.push(...filteredMessages.values());
+            lastMessageId = fetchedMessages.last()?.id;
+
+            const oldestMessageDate = new Date(fetchedMessages.last()?.createdAt);
+            if (oldestMessageDate < start) {
+                break;
+            }
+
+            iteration++;
+        }
+
+        return messages;
+    }
+
+    private async getTopMessages(messages: any[], reactionEmojis: string[]): Promise<{ message: any; count: number }[]> {
+        const messageReactionCounts = await Promise.all(
+            messages.map(async message => {
+                const userIdSet = new Set<string>();
+                const fetchPromises = [];
+                let count = 0;
+                
+                for (const reaction of message.reactions.cache.values()) {
+                    if (
+                        reactionEmojis.includes(reaction.emoji.name ?? '') ||
+                        reactionEmojis.includes(reaction.emoji.id ?? '')
+                    ) {
+                        fetchPromises.push(reaction.users.fetch());
+                    }
+                }
+                
+                const userLists = await Promise.all(fetchPromises);
+                for (const users of userLists) {
+                    for (const user of users) {
+                        if (!userIdSet.has(user[0])) {
+                            count += 1;
+                        }
+                        userIdSet.add(user[0]);
+                    }
+                }
+                
+                return { message, count };
+            })
+        );
+
+        const messagesWithReactions = messageReactionCounts.filter(item => item.count > 0);
+        messagesWithReactions.sort((a, b) => b.count - a.count);
+
+        return messagesWithReactions.slice(0, 3); // Top 3
     }
 
     // Cleanup old data

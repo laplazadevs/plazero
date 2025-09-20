@@ -23,11 +23,8 @@ if (!guildId) {
 
 const commands = [
     new SlashCommandBuilder()
-        .setName('gettop')
-        .setDescription('Anuncia el ganador scrapeando los mensajes con más reacciones'),
-    new SlashCommandBuilder()
-        .setName('memeoftheyear')
-        .setDescription('Get the most reacted meme of the year 2024 (Jan 1st - Dec 31st)'),
+        .setName('meme-of-the-year')
+        .setDescription('Muestra los 3 memes más votados del año actual hasta la fecha'),
     new SlashCommandBuilder()
         .setName('meme-stats')
         .setDescription('Muestra estadísticas de memes y concursos'),
