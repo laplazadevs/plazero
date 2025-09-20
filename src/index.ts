@@ -3,14 +3,7 @@ import dayjs from 'dayjs';
 import isBetween from 'dayjs/plugin/isBetween.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
-import {
-    BaseMessageOptions,
-    Client,
-    Events,
-    GatewayIntentBits,
-    Message,
-    TextChannel,
-} from 'discord.js';
+import { Client, Events, GatewayIntentBits, Message } from 'discord.js';
 
 // Import our modular services
 import {

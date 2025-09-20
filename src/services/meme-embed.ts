@@ -63,13 +63,13 @@ export function createMemeWinnersEmbed(
 }
 
 export function createYearlyWinnersEmbed(
-    winners: MemeData[], 
-    year?: number, 
+    winners: MemeData[],
+    year?: number,
     currentDate?: string
 ): EmbedBuilder {
     const displayYear = year || new Date().getFullYear();
     const dateInfo = currentDate ? ` (hasta ${currentDate})` : '';
-    
+
     let description = `🏆 **LOS MEJORES MEMES DEL ${displayYear}** 🏆\n\n`;
 
     if (winners.length === 0) {
@@ -83,7 +83,7 @@ export function createYearlyWinnersEmbed(
             }! Tu meme alcanzó ${winner.reactionCount} reacciones\n`;
             description += `${winnerLink}\n\n`;
         }
-        
+
         if (currentDate) {
             description += `📊 Resultados del año ${displayYear} hasta la fecha${dateInfo}`;
         } else {
@@ -91,11 +91,11 @@ export function createYearlyWinnersEmbed(
         }
     }
 
-    const title = currentDate 
+    const title = currentDate
         ? `🏆 Top Memes ${displayYear}${dateInfo}`
         : `🏆 Memes del Año ${displayYear}`;
-        
-    const footerText = currentDate 
+
+    const footerText = currentDate
         ? `Resultados actualizados hasta ${currentDate}, ${displayYear}`
         : 'Concurso anual finalizado';
 

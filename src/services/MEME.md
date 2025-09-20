@@ -93,7 +93,7 @@ The bot automatically processes expired contests **every hour** and announces wi
 ### Automatic Contest Completion
 
 -   **Hourly Check**: Every hour at minute 0, the bot checks for expired contests
--   **Winner Processing**: Automatically finds top 3 memes and top 3 bones for expired contests  
+-   **Winner Processing**: Automatically finds top 3 memes and top 3 bones for expired contests
 -   **Announcements**: Posts winner announcements in the contest channel
 -   **Database Updates**: Updates user statistics and contest records
 

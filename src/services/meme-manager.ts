@@ -2,7 +2,6 @@ import { User } from 'discord.js';
 import { v4 as uuidv4 } from 'uuid';
 
 import { BONE_EMOJI, LAUGH_EMOJIS, MEME_CHANNEL_NAME } from '../config/constants.js';
-
 import { MemeRepository } from '../repositories/meme-repository.js';
 import { UserRepository } from '../repositories/user-repository.js';
 import { MemeContest, MemeData, MemeStats } from '../types/meme.js';
@@ -194,7 +193,7 @@ export class MemeManager {
         for (const contest of activeContests) {
             if (contest.endDate <= now) {
                 console.log(`Processing expired contest: ${contest.id}`);
-                
+
                 try {
                     // Find the meme channel
                     const memeChannel = client.channels.cache.find(
@@ -258,23 +257,37 @@ export class MemeManager {
                     if (contest.channelId && (memeWinners.length > 0 || boneWinners.length > 0)) {
                         const contestChannel = client.channels.cache.get(contest.channelId);
                         if (contestChannel) {
-                            const period = `${new Date(contest.startDate).toLocaleDateString()} - ${new Date(contest.endDate).toLocaleDateString()}`;
-                            
+                            const period = `${new Date(
+                                contest.startDate
+                            ).toLocaleDateString()} - ${new Date(
+                                contest.endDate
+                            ).toLocaleDateString()}`;
+
                             if (memeWinners.length > 0) {
                                 const { createMemeWinnersEmbed } = await import('./meme-embed.js');
-                                const memeEmbed = createMemeWinnersEmbed(memeWinners, 'meme', period);
+                                const memeEmbed = createMemeWinnersEmbed(
+                                    memeWinners,
+                                    'meme',
+                                    period
+                                );
                                 await contestChannel.send({ embeds: [memeEmbed] });
                             }
 
                             if (boneWinners.length > 0) {
                                 const { createMemeWinnersEmbed } = await import('./meme-embed.js');
-                                const boneEmbed = createMemeWinnersEmbed(boneWinners, 'bone', period);
+                                const boneEmbed = createMemeWinnersEmbed(
+                                    boneWinners,
+                                    'bone',
+                                    period
+                                );
                                 await contestChannel.send({ embeds: [boneEmbed] });
                             }
                         }
                     }
 
-                    console.log(`✅ Contest ${contest.id} completed with ${memeWinners.length} meme winners and ${boneWinners.length} bone winners`);
+                    console.log(
+                        `✅ Contest ${contest.id} completed with ${memeWinners.length} meme winners and ${boneWinners.length} bone winners`
+                    );
                 } catch (error) {
                     console.error(`Error processing contest ${contest.id}:`, error);
                 }
@@ -283,7 +296,11 @@ export class MemeManager {
     }
 
     // Helper methods for automatic processing
-    private async fetchMessagesInRange(channel: any, startDate: Date, endDate: Date): Promise<any[]> {
+    private async fetchMessagesInRange(
+        channel: any,
+        startDate: Date,
+        endDate: Date
+    ): Promise<any[]> {
         let messages: any[] = [];
         let lastMessageId: string | undefined;
         let hasMoreMessages = true;
@@ -323,13 +340,16 @@ export class MemeManager {
         return messages;
     }
 
-    private async getTopMessages(messages: any[], reactionEmojis: string[]): Promise<{ message: any; count: number }[]> {
+    private async getTopMessages(
+        messages: any[],
+        reactionEmojis: string[]
+    ): Promise<{ message: any; count: number }[]> {
         const messageReactionCounts = await Promise.all(
             messages.map(async message => {
                 const userIdSet = new Set<string>();
                 const fetchPromises = [];
                 let count = 0;
-                
+
                 for (const reaction of message.reactions.cache.values()) {
                     if (
                         reactionEmojis.includes(reaction.emoji.name ?? '') ||
@@ -338,7 +358,7 @@ export class MemeManager {
                         fetchPromises.push(reaction.users.fetch());
                     }
                 }
-                
+
                 const userLists = await Promise.all(fetchPromises);
                 for (const users of userLists) {
                     for (const user of users) {
@@ -348,7 +368,7 @@ export class MemeManager {
                         userIdSet.add(user[0]);
                     }
                 }
-                
+
                 return { message, count };
             })
         );

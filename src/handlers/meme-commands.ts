@@ -122,7 +122,7 @@ export async function handleGetTopCommand(
 
 export async function handleMemeOfTheYearCommand(
     interaction: ChatInputCommandInteraction,
-    memeManager: MemeManager
+    _memeManager: MemeManager
 ): Promise<void> {
     await interaction.deferReply();
 
@@ -164,7 +164,11 @@ export async function handleMemeOfTheYearCommand(
         }));
 
         // Create and send the embed with current year information
-        const embed = createYearlyWinnersEmbed(yearlyWinners, currentYear, endDate.format('MMMM DD'));
+        const embed = createYearlyWinnersEmbed(
+            yearlyWinners,
+            currentYear,
+            endDate.format('MMMM DD')
+        );
         await interaction.editReply({ embeds: [embed] });
     } catch (error) {
         console.error('Error in handleMemeOfTheYearCommand:', error);
