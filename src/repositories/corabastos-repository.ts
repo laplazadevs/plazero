@@ -1,7 +1,7 @@
 import { User } from 'discord.js';
 import { v4 as uuidv4 } from 'uuid';
 
-import { UserRepository } from './user-repository.js';
+import { UserData, UserRepository } from './user-repository.js';
 import { DatabaseService } from '../services/database-service.js';
 import {
     CorabastosAgendaData,
@@ -388,6 +388,11 @@ export class CorabastosRepository {
             thisWeekAgendaItems: parseInt(thisWeekResult.rows[0]?.count || '0'),
             emergencyRequestsPending: parseInt(emergencyPendingResult.rows[0]?.count || '0'),
         };
+    }
+
+    // User data helpers
+    public async getUserData(userId: string): Promise<UserData | null> {
+        return await this.userRepo.getUser(userId);
     }
 
     // Cleanup operations

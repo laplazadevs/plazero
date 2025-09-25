@@ -277,10 +277,28 @@ export class CorabastosManager {
     }
 
     private async mapAgendaDataToItem(data: CorabastosAgendaData): Promise<CorabastosAgendaItem> {
+        // Get user data from database to properly populate User object
+        const userData = await this.repository.getUserData(data.user_id);
+
+        // Create User object with proper data or fallback to minimal
+        const user = userData
+            ? ({
+                  id: userData.id,
+                  username: userData.username,
+                  discriminator: userData.discriminator,
+                  displayName: userData.username, // Use username as displayName fallback
+                  avatarURL: () => userData.avatar_url,
+              } as User)
+            : ({
+                  id: data.user_id,
+                  username: 'Unknown User',
+                  displayName: 'Unknown User',
+              } as User);
+
         return {
             id: data.id,
             sessionId: data.session_id,
-            user: { id: data.user_id } as User, // Minimal user object
+            user: user,
             turno: data.turno,
             topic: data.topic,
             description: data.description,

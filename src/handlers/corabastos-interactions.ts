@@ -87,15 +87,24 @@ async function handleAgendaConfirmation(
 
         await interaction.editReply({ embeds: [successEmbed] });
 
-        // Update the original message to remove buttons
-        const updatedEmbed = new EmbedBuilder(originalEmbed.data).setColor(0x00ff00).setFooter({
-            text: '✅ Tema confirmado y agregado a la agenda.',
-        });
+        // Try to update the original message to remove buttons, but handle if it no longer exists
+        try {
+            const updatedEmbed = new EmbedBuilder(originalEmbed.data).setColor(0x00ff00).setFooter({
+                text: '✅ Tema confirmado y agregado a la agenda.',
+            });
 
-        await interaction.message.edit({
-            embeds: [updatedEmbed],
-            components: [],
-        });
+            await interaction.message.edit({
+                embeds: [updatedEmbed],
+                components: [],
+            });
+        } catch (messageError) {
+            // If the original message is no longer available, log the error but don't fail the operation
+            console.warn(
+                'Could not update original confirmation message (may have been deleted):',
+                messageError
+            );
+            // The agenda item was still successfully confirmed in the database
+        }
     } catch (error) {
         console.error('Error confirming agenda item:', error);
         const errorMessage = error instanceof Error ? error.message : 'Error al confirmar el tema';
@@ -119,16 +128,25 @@ async function handleAgendaCancellation(
         const cancelledEmbed = createAgendaCancelledEmbed();
         await interaction.editReply({ embeds: [cancelledEmbed] });
 
-        // Update the original message to remove buttons
-        const originalEmbed = interaction.message.embeds[0];
-        const updatedEmbed = new EmbedBuilder(originalEmbed.data).setColor(0xff0000).setFooter({
-            text: '❌ Tema cancelado.',
-        });
+        // Try to update the original message to remove buttons, but handle if it no longer exists
+        try {
+            const originalEmbed = interaction.message.embeds[0];
+            const updatedEmbed = new EmbedBuilder(originalEmbed.data).setColor(0xff0000).setFooter({
+                text: '❌ Tema cancelado.',
+            });
 
-        await interaction.message.edit({
-            embeds: [updatedEmbed],
-            components: [],
-        });
+            await interaction.message.edit({
+                embeds: [updatedEmbed],
+                components: [],
+            });
+        } catch (messageError) {
+            // If the original message is no longer available, log the error but don't fail the operation
+            console.warn(
+                'Could not update original cancellation message (may have been deleted):',
+                messageError
+            );
+            // The agenda item was still successfully cancelled in the database
+        }
     } catch (error) {
         console.error('Error cancelling agenda item:', error);
         const errorMessage = error instanceof Error ? error.message : 'Error al cancelar el tema';
