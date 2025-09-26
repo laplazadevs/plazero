@@ -461,15 +461,23 @@ export async function handleMemeCompleteContestCommand(
 
             await interaction.editReply(
                 `✅ **Concurso procesado exitosamente!**\n\n` +
-                `El concurso ${contestId} ha sido forzado a completarse.\n\n` +
-                `Revisa el canal <#${contest.channelId}> para ver los resultados.`
+                    `El concurso ${contestId} ha sido forzado a completarse.\n\n` +
+                    `Revisa el canal <#${contest.channelId}> para ver los resultados.`
             );
         } catch (processingError) {
             console.error('Error in processSpecificContest:', processingError);
             await interaction.editReply(
                 `❌ **Error durante el procesamiento:**\n\n` +
-                `\`\`\`${processingError instanceof Error ? processingError.message : String(processingError)}\`\`\`\n\n` +
-                `**Stack trace:**\n\`\`\`${processingError instanceof Error ? processingError.stack : 'No stack available'}\`\`\``
+                    `\`\`\`${
+                        processingError instanceof Error
+                            ? processingError.message
+                            : String(processingError)
+                    }\`\`\`\n\n` +
+                    `**Stack trace:**\n\`\`\`${
+                        processingError instanceof Error
+                            ? processingError.stack
+                            : 'No stack available'
+                    }\`\`\``
             );
         }
     } catch (error) {

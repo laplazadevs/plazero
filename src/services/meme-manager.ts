@@ -293,7 +293,7 @@ export class MemeManager {
                     console.error(`Error details:`, {
                         contestId: contest.id,
                         error: error instanceof Error ? error.message : String(error),
-                        stack: error instanceof Error ? error.stack : undefined
+                        stack: error instanceof Error ? error.stack : undefined,
                     });
                 }
             }
@@ -312,14 +312,19 @@ export class MemeManager {
             );
 
             if (!memeChannel) {
-                console.log(`Available channels:`, client.channels.cache
-                    .filter((ch: any) => ch.isTextBased())
-                    .map((ch: any) => `${ch.name} (${ch.id})`));
+                console.log(
+                    `Available channels:`,
+                    client.channels.cache
+                        .filter((ch: any) => ch.isTextBased())
+                        .map((ch: any) => `${ch.name} (${ch.id})`)
+                );
                 throw new Error(`Meme channel "${MEME_CHANNEL_NAME}" not found`);
             }
             console.log(`Step 2: Found meme channel: ${memeChannel.name} (${memeChannel.id})`);
-            
-            console.log(`Step 3: Fetching messages from ${contest.startDate} to ${contest.endDate}`);
+
+            console.log(
+                `Step 3: Fetching messages from ${contest.startDate} to ${contest.endDate}`
+            );
 
             // Fetch messages from the contest period
             const messages = await this.fetchMessagesInRange(
@@ -331,7 +336,9 @@ export class MemeManager {
             console.log(`Step 4: Found ${messages.length} messages in contest period`);
 
             if (messages.length === 0) {
-                console.log(`Step 5: No messages found for contest ${contest.id}, completing without winners`);
+                console.log(
+                    `Step 5: No messages found for contest ${contest.id}, completing without winners`
+                );
                 await this.memeRepo.completeContest(contest.id);
                 return;
             }
@@ -372,7 +379,9 @@ export class MemeManager {
                 submittedAt: winner.message.createdAt,
             }));
 
-            console.log(`Step 9: Completing contest with ${memeWinners.length} meme winners and ${boneWinners.length} bone winners`);
+            console.log(
+                `Step 9: Completing contest with ${memeWinners.length} meme winners and ${boneWinners.length} bone winners`
+            );
             // Complete the contest with both meme and bone winners
             await this.completeContest(contest.id, [...memeWinners, ...boneWinners]);
             console.log(`Step 10: Contest ${contest.id} database completion successful`);

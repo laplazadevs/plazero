@@ -43,7 +43,7 @@ export function createMemeWinnersEmbed(
         for (const [index, winner] of winners.entries()) {
             const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : '🥉';
             const winnerLink = winner.message.url;
-            description += `${medal} **#${index + 1}** - ¡Felicitaciones, ${
+            description += `${medal} **#${index + 1}** - ¡Felicitaciones, @${
                 winner.author.username
             }! Tu post ha ganado con ${winner.reactionCount} reacciones.\n`;
             description += `[Ver mensaje](${winnerLink})\n\n`;
@@ -51,7 +51,6 @@ export function createMemeWinnersEmbed(
     }
 
     const embed = new EmbedBuilder()
-        .setTitle(`${emoji} ${contestName} - ${contestPeriod}`)
         .setDescription(description)
         .setColor(contestType === 'meme' ? 0x00ff00 : 0xffa500)
         .setTimestamp()
