@@ -166,6 +166,16 @@ export class MemeRepository {
         }
 
         for (const [userId, stats] of userStats.entries()) {
+            // Ensure user exists before updating stats
+            await this.db.query(
+                `
+                INSERT INTO users (id, username, updated_at)
+                VALUES ($1, 'Unknown', NOW())
+                ON CONFLICT (id) DO NOTHING
+            `,
+                [userId]
+            );
+
             const query = `
                 INSERT INTO user_stats (user_id, total_meme_wins, total_bone_wins, updated_at)
                 VALUES ($1, $2, $3, NOW())
