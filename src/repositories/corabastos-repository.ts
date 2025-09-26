@@ -415,4 +415,37 @@ export class CorabastosRepository {
         const result = await this.db.query(query);
         return result.rowCount || 0;
     }
+
+    // Turno notification tracking
+    public async hasNotificationBeenSent(
+        sessionId: string,
+        turno: number,
+        date: Date
+    ): Promise<boolean> {
+        const query = `
+            SELECT COUNT(*) as count 
+            FROM turno_notifications 
+            WHERE session_id = $1 AND turno = $2 AND notification_date = $3
+        `;
+        const result = await this.db.query(query, [sessionId, turno, date]);
+        return parseInt(result.rows[0].count) > 0;
+    }
+
+    public async markNotificationSent(sessionId: string, turno: number, date: Date): Promise<void> {
+        const query = `
+            INSERT INTO turno_notifications (session_id, turno, notification_date)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (session_id, turno, notification_date) DO NOTHING
+        `;
+        await this.db.query(query, [sessionId, turno, date]);
+    }
+
+    public async cleanupOldNotifications(daysOld: number = 7): Promise<number> {
+        const query = `
+            DELETE FROM turno_notifications 
+            WHERE sent_at < NOW() - INTERVAL '${daysOld} days'
+        `;
+        const result = await this.db.query(query);
+        return result.rowCount || 0;
+    }
 }

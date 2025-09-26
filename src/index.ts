@@ -144,6 +144,22 @@ client.once('ready', () => {
     );
     contestCompletionJob.start();
 
+    // Schedule turno notifications check every minute
+    const turnoNotificationJob = new CronJob(
+        '0 * * * *', // Every hour at minute 0
+        async () => {
+            try {
+                await corabastosManager.processActiveSessionTurnos(client);
+            } catch (error) {
+                console.error('Error processing turno notifications:', error);
+            }
+        },
+        null, // onComplete
+        true, // start
+        'America/Bogota' // timeZone
+    );
+    turnoNotificationJob.start();
+
     // Run database cleanup every hour
     setInterval(async () => {
         try {
@@ -160,6 +176,12 @@ client.once('ready', () => {
             const expiredRequests = await corabastosManager.cleanupExpiredRequests();
             if (expiredRequests > 0) {
                 console.log(`Cleaned up ${expiredRequests} expired emergency requests`);
+            }
+
+            // Also cleanup old turno notifications (older than 7 days)
+            const cleanedNotifications = await corabastosManager.cleanupOldNotifications();
+            if (cleanedNotifications > 0) {
+                console.log(`Cleaned up ${cleanedNotifications} old turno notifications`);
             }
         } catch (error) {
             console.error('Error during corabastos cleanup:', error);

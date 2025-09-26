@@ -1,6 +1,6 @@
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone.js';
-import { Guild, TextChannel, User, VoiceChannel } from 'discord.js';
+import { EmbedBuilder, Guild, TextChannel, User, VoiceChannel } from 'discord.js';
 
 import {
     CORABASTOS_FRIDAY_HOUR,
@@ -237,6 +237,158 @@ export class CorabastosManager {
         return await this.repository.getStats();
     }
 
+    // Turno notification system
+    public async processActiveSessionTurnos(client: any): Promise<void> {
+        const session = await this.getCurrentWeekSession();
+        if (!session || session.status !== 'scheduled') {
+            return; // Only process scheduled sessions
+        }
+
+        const now = dayjs().tz('America/Bogota');
+        const currentHour = now.hour();
+        const currentMinute = now.minute();
+
+        // Only process at the exact start of each hour (minute 0)
+        if (currentMinute !== 0) {
+            return;
+        }
+
+        // Check if we're in a valid turno time (12 PM to 10 PM)
+        if (currentHour < 12 || currentHour > 22) {
+            return;
+        }
+
+        const currentTurno = currentHour - 12; // Turno 0 = 12 PM, Turno 1 = 1 PM, etc.
+
+        // Get agenda items for current turno
+        const agendaItems = await this.repository.getSessionAgenda(session.id);
+        const currentTurnoItems = agendaItems.filter(
+            item => item.turno === currentTurno && item.status === 'confirmed'
+        );
+
+        if (currentTurnoItems.length === 0) {
+            return;
+        }
+
+        // Check if we already notified for this turno today
+        const today = now.startOf('day').toDate();
+        if (await this.repository.hasNotificationBeenSent(session.id, currentTurno, today)) {
+            return;
+        }
+
+        try {
+            // Send channel notification
+            await this.sendTurnoChannelNotification(
+                client,
+                session,
+                currentTurno,
+                currentTurnoItems
+            );
+
+            // Send DM notifications to agenda submitters
+            await this.sendTurnoDMNotifications(client, currentTurno, currentTurnoItems);
+
+            // Mark notification as sent
+            await this.repository.markNotificationSent(session.id, currentTurno, today);
+
+            console.log(
+                `Sent turno ${currentTurno} notifications for ${currentTurnoItems.length} agenda items`
+            );
+        } catch (error) {
+            console.error(`Error processing turno ${currentTurno} notifications:`, error);
+        }
+    }
+
+    private async sendTurnoChannelNotification(
+        client: any,
+        session: CorabastosSession,
+        turno: number,
+        items: CorabastosAgendaData[]
+    ): Promise<void> {
+        // Find general channel to send notification
+        const guild = client.guilds.cache.first();
+        if (!guild) return;
+
+        const generalChannel = await this.findGeneralChannel(guild);
+        if (!generalChannel) return;
+
+        const timeStr = turno === 0 ? '12:00 PM' : `${turno}:00 PM`;
+
+        const embed = new EmbedBuilder()
+            .setTitle(`🔔 Turno ${turno} - ${timeStr}`)
+            .setDescription(
+                `Es hora del **Turno ${turno}** del corabastos. Los siguientes temas están programados:`
+            )
+            .setColor(0x0099ff)
+            .setTimestamp();
+
+        // Add each agenda item as a field
+        items.forEach((item, index) => {
+            embed.addFields({
+                name: `📝 Tema ${index + 1}`,
+                value: `**${item.topic}**${item.description ? `\n${item.description}` : ''}`,
+                inline: false,
+            });
+        });
+
+        embed.addFields({
+            name: '📍 Ubicación',
+            value: 'Únanse al canal de voz **corabastos** para participar',
+            inline: false,
+        });
+
+        await generalChannel.send({
+            content: '@everyone',
+            embeds: [embed],
+        });
+    }
+
+    private async sendTurnoDMNotifications(
+        client: any,
+        turno: number,
+        items: CorabastosAgendaData[]
+    ): Promise<void> {
+        const timeStr = turno === 0 ? '12:00 PM' : `${turno}:00 PM`;
+
+        for (const item of items) {
+            try {
+                const user = await client.users.fetch(item.user_id);
+                if (!user) continue;
+
+                const embed = new EmbedBuilder()
+                    .setTitle(`⏰ Recordatorio de Corabastos - Turno ${turno}`)
+                    .setDescription(
+                        `¡Es hora de tu tema en el corabastos!\n\n` +
+                            `**Tu tema:** ${item.topic}\n` +
+                            `**Turno:** ${turno} (${timeStr})\n` +
+                            `**Ubicación:** Canal de voz corabastos`
+                    )
+                    .setColor(0x00ff00)
+                    .setTimestamp();
+
+                if (item.description) {
+                    embed.addFields({
+                        name: '📋 Descripción',
+                        value: item.description,
+                        inline: false,
+                    });
+                }
+
+                embed.addFields({
+                    name: '💡 Recordatorio',
+                    value: 'Únete al canal de voz **corabastos** para presentar tu tema.',
+                    inline: false,
+                });
+
+                await user.send({ embeds: [embed] });
+                console.log(`Sent DM notification to user ${user.username} for turno ${turno}`);
+            } catch (error) {
+                console.error(`Failed to send DM to user ${item.user_id}:`, error);
+                // Continue with other notifications even if one fails
+            }
+        }
+    }
+
     // Utility methods
     private getCurrentWeekRange(): { weekStart: Date; weekEnd: Date } {
         const now = dayjs().tz('America/Bogota');
@@ -334,6 +486,10 @@ export class CorabastosManager {
     // Cleanup methods
     public async cleanupExpiredRequests(): Promise<number> {
         return await this.repository.cleanupExpiredEmergencyRequests();
+    }
+
+    public async cleanupOldNotifications(daysOld: number = 7): Promise<number> {
+        return await this.repository.cleanupOldNotifications(daysOld);
     }
 
     public async cleanupOldSessions(daysOld: number = 90): Promise<number> {
