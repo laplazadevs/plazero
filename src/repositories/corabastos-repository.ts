@@ -358,7 +358,7 @@ export class CorabastosRepository {
             'SELECT COUNT(*) as count FROM corabastos_sessions'
         );
         const activeSessionsResult = await this.db.query(
-            'SELECT COUNT(*) as count FROM corabastos_sessions WHERE status = \'active\''
+            "SELECT COUNT(*) as count FROM corabastos_sessions WHERE status = 'active'"
         );
         const totalAgendaResult = await this.db.query(
             'SELECT COUNT(*) as count FROM corabastos_agenda'

@@ -146,7 +146,7 @@ client.once('ready', () => {
 
     // Schedule turno notifications check every minute
     const turnoNotificationJob = new CronJob(
-        '0 * * * *', // Every hour at minute 0
+        '* * * * *', // Every minute
         async () => {
             try {
                 await corabastosManager.processActiveSessionTurnos(client);

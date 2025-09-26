@@ -6,6 +6,14 @@ Automatic notification system for corabastos agenda items that sends reminders w
 
 ## Features
 
+### ✅ **Pre-Session Agenda Notification**
+
+-   **10 minutes before start** (11:50 AM Colombia time)
+-   **Complete agenda preview** showing all scheduled topics by turno
+-   **No @everyone** - friendly announcement without notification spam
+-   **Full day overview** helps participants plan their time
+-   **Empty agenda encouragement** - motivates participation when no topics scheduled
+
 ### ✅ **Channel Notifications**
 
 -   **@everyone announcement** in general channel when turno time arrives
@@ -36,11 +44,22 @@ Automatic notification system for corabastos agenda items that sends reminders w
 
 ### Cron Job
 
--   **Frequency**: Every hour at minute 0 (`0 * * * *`)
+-   **Frequency**: Every minute (`* * * * *`)
 -   **Timezone**: Colombia time (`America/Bogota`)
 -   **Scope**: Only active scheduled sessions
+-   **Pre-session check**: 11:50 AM for agenda preview
+-   **Turno checks**: Every hour at minute 0 (12:00, 1:00, 2:00 PM, etc.)
 
 ### Process Flow
+
+#### Pre-Session (11:50 AM)
+
+1. **Check for agenda items** in the current session
+2. **If items exist**: Send complete agenda preview
+3. **If no items**: Send encouragement notification to add topics
+4. **Mark pre-session notification as sent** (turno -1)
+
+#### Hourly Turno Notifications (12 PM - 10 PM)
 
 1. **Check current time** (Colombia timezone)
 2. **Calculate current turno** (hour - 12)
@@ -78,6 +97,56 @@ CREATE TABLE turno_notifications (
 -   **Runs**: Every 30 minutes with other corabastos cleanup
 
 ## Example Notifications
+
+### Pre-Session Agenda Notification (11:50 AM)
+
+```
+📅 Agenda del Corabastos de Hoy
+
+¡El corabastos comienza en 10 minutos! Aquí está la agenda completa del día:
+
+🕐 Turno 0 (12:00 PM)
+1. **Bienvenida y anuncios generales**
+
+🕐 Turno 2 (2:00 PM)
+1. **Consejos para iniciar entrevistas, fases, rangos...** - Descripción detallada
+
+🕐 Turno 5 (5:00 PM)
+1. **Revisión de proyectos pendientes**
+2. **Planificación del próximo sprint**
+
+📍 Ubicación: Canal de voz corabastos
+⏰ Inicio: En 10 minutos (12:00 PM)
+```
+
+### Empty Agenda Encouragement (11:50 AM)
+
+```
+📝 ¡Agenda Vacía para el Corabastos de Hoy!
+
+¡El corabastos comienza en 10 minutos pero aún no hay temas en la agenda!
+
+🚀 ¡Es una oportunidad perfecta para participar!
+
+💡 ¿Qué puedes hacer?
+• Agregar un tema con /corabastos-agenda agregar
+• Compartir una pregunta o consulta
+• Proponer una discusión interesante
+• ¡Cualquier tema es bienvenido!
+
+⏰ ¿Cuándo?                    🎯 Beneficios
+• Turno 0: 12:00 PM           • Recibirás notificación DM a tu hora
+• Turno 1: 1:00 PM            • Tu tema aparecerá en @everyone
+• Turno 2: 2:00 PM            • ¡La comunidad te ayudará!
+• Y así hasta las 10:00 PM
+
+📍 Recordatorio
+Canal de voz: corabastos
+Inicio: En 10 minutos (12:00 PM)
+Duración: ¡Los turnos que necesites!
+
+¡Los temas se pueden agregar incluso durante el corabastos!
+```
 
 ### Channel Notification
 

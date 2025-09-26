@@ -248,7 +248,13 @@ export class CorabastosManager {
         const currentHour = now.hour();
         const currentMinute = now.minute();
 
-        // Only process at the exact start of each hour (minute 0)
+        // Check for pre-session agenda notification (11:50 AM - 10 minutes before Turno 0)
+        if (currentHour === 11 && currentMinute === 50) {
+            await this.sendPreSessionAgendaNotification(client, session);
+            return;
+        }
+
+        // Only process turno notifications at the exact start of each hour (minute 0)
         if (currentMinute !== 0) {
             return;
         }
@@ -297,6 +303,164 @@ export class CorabastosManager {
         } catch (error) {
             console.error(`Error processing turno ${currentTurno} notifications:`, error);
         }
+    }
+
+    private async sendPreSessionAgendaNotification(
+        client: any,
+        session: CorabastosSession
+    ): Promise<void> {
+        // Check if we already sent the pre-session notification today
+        const now = dayjs().tz('America/Bogota');
+        const today = now.startOf('day').toDate();
+
+        // Use a special turno number (-1) to track pre-session notifications
+        if (await this.repository.hasNotificationBeenSent(session.id, -1, today)) {
+            return;
+        }
+
+        try {
+            // Find general channel first
+            const guild = client.guilds.cache.first();
+            if (!guild) return;
+
+            const generalChannel = await this.findGeneralChannel(guild);
+            if (!generalChannel) return;
+
+            // Get all confirmed agenda items for today
+            const agendaItems = await this.repository.getSessionAgenda(session.id);
+            const confirmedItems = agendaItems.filter(item => item.status === 'confirmed');
+
+            if (confirmedItems.length === 0) {
+                // Send encouragement notification when no agenda items
+                await this.sendNoAgendaEncouragementNotification(generalChannel);
+                await this.repository.markNotificationSent(session.id, -1, today);
+                console.log('Sent no-agenda encouragement notification');
+                return;
+            }
+
+            // Group items by turno
+            const itemsByTurno = new Map<number, CorabastosAgendaData[]>();
+            confirmedItems.forEach(item => {
+                if (!itemsByTurno.has(item.turno)) {
+                    itemsByTurno.set(item.turno, []);
+                }
+                const turnoItems = itemsByTurno.get(item.turno);
+                if (turnoItems) {
+                    turnoItems.push(item);
+                }
+            });
+
+            // Create agenda preview embed
+            const embed = new EmbedBuilder()
+                .setTitle('📅 Agenda del Corabastos de Hoy')
+                .setDescription(
+                    '¡El corabastos comienza en **10 minutos**! Aquí está la agenda completa del día:'
+                )
+                .setColor(0x00ff00)
+                .setTimestamp();
+
+            // Add fields for each turno with items
+            const sortedTurnos = Array.from(itemsByTurno.keys()).sort((a, b) => a - b);
+
+            for (const turno of sortedTurnos) {
+                const items = itemsByTurno.get(turno);
+                if (!items) continue;
+
+                const timeStr = turno === 0 ? '12:00 PM' : `${turno}:00 PM`;
+
+                const itemsList = items
+                    .map(
+                        (item, index) =>
+                            `${index + 1}. **${item.topic}**${
+                                item.description ? ` - ${item.description}` : ''
+                            }`
+                    )
+                    .join('\n');
+
+                embed.addFields({
+                    name: `🕐 Turno ${turno} (${timeStr})`,
+                    value: itemsList,
+                    inline: false,
+                });
+            }
+
+            embed.addFields(
+                {
+                    name: '📍 Ubicación',
+                    value: 'Canal de voz **corabastos**',
+                    inline: true,
+                },
+                {
+                    name: '⏰ Inicio',
+                    value: 'En **10 minutos** (12:00 PM)',
+                    inline: true,
+                }
+            );
+
+            // Send the notification (no @everyone for pre-session)
+            await generalChannel.send({ embeds: [embed] });
+
+            // Mark pre-session notification as sent
+            await this.repository.markNotificationSent(session.id, -1, today);
+
+            console.log(
+                `Sent pre-session agenda notification for ${confirmedItems.length} agenda items`
+            );
+        } catch (error) {
+            console.error('Error sending pre-session agenda notification:', error);
+        }
+    }
+
+    private async sendNoAgendaEncouragementNotification(generalChannel: any): Promise<void> {
+        const embed = new EmbedBuilder()
+            .setTitle('📝 ¡Agenda Vacía para el Corabastos de Hoy!')
+            .setDescription(
+                '¡El corabastos comienza en **10 minutos** pero aún no hay temas en la agenda!\n\n' +
+                    '🚀 **¡Es una oportunidad perfecta para participar!**'
+            )
+            .setColor(0xffa500) // Orange color for encouragement
+            .addFields(
+                {
+                    name: '💡 ¿Qué puedes hacer?',
+                    value:
+                        '• Agregar un tema con `/corabastos-agenda agregar`\n' +
+                        '• Compartir una pregunta o consulta\n' +
+                        '• Proponer una discusión interesante\n' +
+                        '• ¡Cualquier tema es bienvenido!',
+                    inline: false,
+                },
+                {
+                    name: '⏰ ¿Cuándo?',
+                    value:
+                        '• **Turno 0**: 12:00 PM (¡perfecto para empezar!)\n' +
+                        '• **Turno 1**: 1:00 PM\n' +
+                        '• **Turno 2**: 2:00 PM\n' +
+                        '• Y así hasta las 10:00 PM',
+                    inline: true,
+                },
+                {
+                    name: '🎯 Beneficios',
+                    value:
+                        '• Recibirás notificación DM a tu hora\n' +
+                        '• Tu tema aparecerá en @everyone\n' +
+                        '• ¡La comunidad te ayudará!',
+                    inline: true,
+                }
+            )
+            .addFields({
+                name: '📍 Recordatorio',
+                value:
+                    '**Canal de voz:** corabastos\n' +
+                    '**Inicio:** En 10 minutos (12:00 PM)\n' +
+                    '**Duración:** ¡Los turnos que necesites!',
+                inline: false,
+            })
+            .setFooter({
+                text: '¡Los temas se pueden agregar incluso durante el corabastos!',
+            })
+            .setTimestamp();
+
+        await generalChannel.send({ embeds: [embed] });
     }
 
     private async sendTurnoChannelNotification(
