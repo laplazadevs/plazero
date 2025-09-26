@@ -59,15 +59,15 @@ export class CorabastosManager {
         emergencyRequest: CorabastosEmergencyRequest,
         createdBy: User
     ): Promise<CorabastosSession> {
-        const now = new Date();
-        const weekStart = dayjs(now).startOf('week').toDate();
-        const weekEnd = dayjs(now).endOf('week').toDate();
+        const now = dayjs().tz('America/Bogota');
+        const weekStart = now.startOf('week').utc().toDate();
+        const weekEnd = now.endOf('week').utc().toDate();
 
         const sessionData = await this.repository.createSession(
             weekStart,
             weekEnd,
             'emergency',
-            now,
+            now.utc().toDate(),
             createdBy
         );
 
@@ -240,8 +240,8 @@ export class CorabastosManager {
     // Utility methods
     private getCurrentWeekRange(): { weekStart: Date; weekEnd: Date } {
         const now = dayjs().tz('America/Bogota');
-        const weekStart = now.startOf('week').toDate(); // Monday
-        const weekEnd = now.endOf('week').toDate(); // Sunday
+        const weekStart = now.startOf('week').utc().toDate(); // Monday
+        const weekEnd = now.endOf('week').utc().toDate(); // Sunday
 
         return { weekStart, weekEnd };
     }
@@ -255,7 +255,8 @@ export class CorabastosManager {
             friday = friday.add(1, 'week');
         }
 
-        return friday.toDate();
+        // Convert to UTC to ensure consistent database storage
+        return friday.utc().toDate();
     }
 
     // Mapping functions

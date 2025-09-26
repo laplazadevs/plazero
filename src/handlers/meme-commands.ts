@@ -31,8 +31,8 @@ export async function handleGetTopCommand(
 
         const contest = await memeManager.createContest(
             'weekly',
-            lastFriday.toDate(),
-            endDate.toDate(),
+            lastFriday.utc().toDate(),
+            endDate.utc().toDate(),
             interaction.channelId,
             interaction.user
         );
@@ -74,8 +74,8 @@ export async function handleGetTopCommand(
             author: winner.message.author,
             reactionCount: winner.count,
             contestType: 'meme' as const,
-            weekStart: lastFriday.toDate(),
-            weekEnd: endDate.toDate(),
+            weekStart: lastFriday.utc().toDate(),
+            weekEnd: endDate.utc().toDate(),
             rank: index + 1,
             submittedAt: winner.message.createdAt,
         }));
@@ -86,8 +86,8 @@ export async function handleGetTopCommand(
             author: winner.message.author,
             reactionCount: winner.count,
             contestType: 'bone' as const,
-            weekStart: lastFriday.toDate(),
-            weekEnd: endDate.toDate(),
+            weekStart: lastFriday.utc().toDate(),
+            weekEnd: endDate.utc().toDate(),
             rank: index + 1,
             submittedAt: winner.message.createdAt,
         }));
@@ -157,8 +157,8 @@ export async function handleMemeOfTheYearCommand(
             author: winner.message.author,
             reactionCount: winner.count,
             contestType: 'meme' as const,
-            weekStart: startDate.toDate(),
-            weekEnd: endDate.toDate(),
+            weekStart: startDate.utc().toDate(),
+            weekEnd: endDate.utc().toDate(),
             rank: index + 1,
             submittedAt: winner.message.createdAt,
         }));
@@ -319,18 +319,18 @@ export async function handleMemeContestCommand(
 
         if (contestType === 'weekly') {
             // Use current Friday-to-Friday period
-            startDate = getCurrentFridayAtNoon().toDate();
-            endDate = getNextFridayAtNoon().toDate();
+            startDate = getCurrentFridayAtNoon().utc().toDate();
+            endDate = getNextFridayAtNoon().utc().toDate();
         } else {
             // Yearly contest
-            startDate = dayjs.tz('2024-01-01', 'America/Bogota').startOf('day').toDate();
-            endDate = dayjs.tz('2024-12-31', 'America/Bogota').endOf('day').toDate();
+            startDate = dayjs.tz('2024-01-01', 'America/Bogota').startOf('day').utc().toDate();
+            endDate = dayjs.tz('2024-12-31', 'America/Bogota').endOf('day').utc().toDate();
         }
 
         // Parse custom duration if provided
         if (durationStr) {
             const now = dayjs().tz('America/Bogota');
-            startDate = now.toDate();
+            startDate = now.utc().toDate();
 
             // Parse duration (e.g., "7d", "30d", "1y")
             const match = durationStr.match(/^(\d+)([dmy])$/);
@@ -340,13 +340,13 @@ export async function handleMemeContestCommand(
 
                 switch (unit) {
                     case 'd':
-                        endDate = now.add(value, 'day').toDate();
+                        endDate = now.add(value, 'day').utc().toDate();
                         break;
                     case 'm':
-                        endDate = now.add(value, 'month').toDate();
+                        endDate = now.add(value, 'month').utc().toDate();
                         break;
                     case 'y':
-                        endDate = now.add(value, 'year').toDate();
+                        endDate = now.add(value, 'year').utc().toDate();
                         break;
                 }
             } else {
