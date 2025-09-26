@@ -29,8 +29,8 @@ export function createDepartureEmbed(member: GuildMember): EmbedBuilder {
         .setTimestamp();
 
     // Add user avatar if available
-    if (member.user.avatarURL()) {
-        embed.setThumbnail(member.user.avatarURL());
+    if (member.user.displayAvatarURL()) {
+        embed.setThumbnail(member.user.displayAvatarURL());
     }
 
     // Add roles information if member had roles

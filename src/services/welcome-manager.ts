@@ -171,7 +171,7 @@ export class WelcomeManager {
             id: userData.id,
             username: userData.username,
             discriminator: userData.discriminator,
-            avatarURL: () => userData.avatar_url,
+            displayAvatarURL: () => userData.avatar_url,
         } as User;
     }
 }

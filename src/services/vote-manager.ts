@@ -197,14 +197,14 @@ export class VoteManager {
                 id: targetUser.id,
                 username: targetUser.username,
                 discriminator: targetUser.discriminator,
-                avatarURL: () => targetUser.avatar_url,
+                displayAvatarURL: () => targetUser.avatar_url,
             } as User;
 
             const initiatorObj = {
                 id: initiator.id,
                 username: initiator.username,
                 discriminator: initiator.discriminator,
-                avatarURL: () => initiator.avatar_url,
+                displayAvatarURL: () => initiator.avatar_url,
             } as User;
 
             return {

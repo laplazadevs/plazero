@@ -35,7 +35,7 @@ export class UserRepository {
             user.id,
             user.username,
             user.discriminator,
-            user.avatarURL(),
+            user.displayAvatarURL(),
         ]);
 
         return result.rows[0];

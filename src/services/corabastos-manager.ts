@@ -287,7 +287,7 @@ export class CorabastosManager {
                   username: userData.username,
                   discriminator: userData.discriminator,
                   displayName: userData.username, // Use username as displayName fallback
-                  avatarURL: () => userData.avatar_url,
+                  displayAvatarURL: () => userData.avatar_url,
               } as User)
             : ({
                   id: data.user_id,
