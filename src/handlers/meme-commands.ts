@@ -456,12 +456,22 @@ export async function handleMemeCompleteContestCommand(
         }
 
         // Force complete the contest
-        await memeManager.processSpecificContest(contest, client);
+        try {
+            await memeManager.processSpecificContest(contest, client);
 
-        await interaction.editReply(
-            `✅ **Concurso procesado exitosamente!**\n\n` +
-                `El concurso ${contestId} ha sido forzado a completarse.`
-        );
+            await interaction.editReply(
+                `✅ **Concurso procesado exitosamente!**\n\n` +
+                `El concurso ${contestId} ha sido forzado a completarse.\n\n` +
+                `Revisa el canal <#${contest.channelId}> para ver los resultados.`
+            );
+        } catch (processingError) {
+            console.error('Error in processSpecificContest:', processingError);
+            await interaction.editReply(
+                `❌ **Error durante el procesamiento:**\n\n` +
+                `\`\`\`${processingError instanceof Error ? processingError.message : String(processingError)}\`\`\`\n\n` +
+                `**Stack trace:**\n\`\`\`${processingError instanceof Error ? processingError.stack : 'No stack available'}\`\`\``
+            );
+        }
     } catch (error) {
         console.error('Error in handleMemeCompleteContestCommand:', error);
         await interaction.editReply(

@@ -290,6 +290,11 @@ export class MemeManager {
                     );
                 } catch (error) {
                     console.error(`Error processing contest ${contest.id}:`, error);
+                    console.error(`Error details:`, {
+                        contestId: contest.id,
+                        error: error instanceof Error ? error.message : String(error),
+                        stack: error instanceof Error ? error.stack : undefined
+                    });
                 }
             }
         }
@@ -300,14 +305,21 @@ export class MemeManager {
         console.log(`Manually processing contest: ${contest.id}`);
 
         try {
+            console.log(`Step 1: Looking for meme channel "${MEME_CHANNEL_NAME}"`);
             // Find the meme channel
             const memeChannel = client.channels.cache.find(
                 (ch: any) => ch.isTextBased() && ch.name === MEME_CHANNEL_NAME
             );
 
             if (!memeChannel) {
+                console.log(`Available channels:`, client.channels.cache
+                    .filter((ch: any) => ch.isTextBased())
+                    .map((ch: any) => `${ch.name} (${ch.id})`));
                 throw new Error(`Meme channel "${MEME_CHANNEL_NAME}" not found`);
             }
+            console.log(`Step 2: Found meme channel: ${memeChannel.name} (${memeChannel.id})`);
+            
+            console.log(`Step 3: Fetching messages from ${contest.startDate} to ${contest.endDate}`);
 
             // Fetch messages from the contest period
             const messages = await this.fetchMessagesInRange(
@@ -316,23 +328,23 @@ export class MemeManager {
                 contest.endDate
             );
 
-            console.log(`Found ${messages.length} messages in contest period`);
+            console.log(`Step 4: Found ${messages.length} messages in contest period`);
 
             if (messages.length === 0) {
-                console.log(
-                    `No messages found for contest ${contest.id}, completing without winners`
-                );
+                console.log(`Step 5: No messages found for contest ${contest.id}, completing without winners`);
                 await this.memeRepo.completeContest(contest.id);
                 return;
             }
 
+            console.log(`Step 5: Getting top memes with emojis:`, LAUGH_EMOJIS);
             // Get top memes (laugh reactions)
             const topMemes = await this.getTopMessages(messages, LAUGH_EMOJIS);
-            console.log(`Found ${topMemes.length} top memes`);
+            console.log(`Step 6: Found ${topMemes.length} top memes`);
 
+            console.log(`Step 7: Getting top bones with emojis:`, BONE_EMOJI);
             // Get top bones (bone reactions)
             const topBones = await this.getTopMessages(messages, BONE_EMOJI);
-            console.log(`Found ${topBones.length} top bones`);
+            console.log(`Step 8: Found ${topBones.length} top bones`);
 
             // Create meme winners
             const memeWinners = topMemes.map((winner, index) => ({
@@ -360,11 +372,10 @@ export class MemeManager {
                 submittedAt: winner.message.createdAt,
             }));
 
+            console.log(`Step 9: Completing contest with ${memeWinners.length} meme winners and ${boneWinners.length} bone winners`);
             // Complete the contest with both meme and bone winners
             await this.completeContest(contest.id, [...memeWinners, ...boneWinners]);
-            console.log(
-                `Contest ${contest.id} completed with ${memeWinners.length} meme winners and ${boneWinners.length} bone winners`
-            );
+            console.log(`Step 10: Contest ${contest.id} database completion successful`);
 
             // Announce winners in the contest channel
             if (contest.channelId && (memeWinners.length > 0 || boneWinners.length > 0)) {
