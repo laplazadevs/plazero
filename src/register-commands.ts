@@ -120,6 +120,15 @@ const commands = [
     new SlashCommandBuilder()
         .setName('corabastos-estado')
         .setDescription('Muestra el estado actual del corabastos'),
+    new SlashCommandBuilder()
+        .setName('meme-complete-contest')
+        .setDescription('Fuerza la finalización manual de un concurso de memes (admin only)')
+        .addStringOption(option =>
+            option
+                .setName('contest-id')
+                .setDescription('ID del concurso a finalizar')
+                .setRequired(true)
+        ),
 ].map(command => command.toJSON());
 
 const rest = new REST({ version: '9' }).setToken(token);

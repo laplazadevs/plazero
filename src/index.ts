@@ -11,6 +11,7 @@ import {
     CORABASTOS_AGENDA_COMMAND,
     CORABASTOS_EMERGENCY_COMMAND,
     CORABASTOS_STATUS_COMMAND,
+    MEME_COMPLETE_CONTEST_COMMAND,
     MEME_CONTEST_COMMAND,
     MEME_OF_THE_YEAR_COMMAND,
     MEME_STATS_COMMAND,
@@ -29,6 +30,7 @@ import {
 } from './handlers/corabastos-interactions.js';
 import { handleMemberLeave } from './handlers/departure-handler.js';
 import {
+    handleMemeCompleteContestCommand,
     handleMemeContestCommand,
     handleMemeOfTheYearCommand,
     handleMemeStatsCommand,
@@ -199,6 +201,8 @@ client.on(Events.InteractionCreate, async interaction => {
                 await handleMemeStatsCommand(interaction, memeManager);
             } else if (interaction.commandName === MEME_CONTEST_COMMAND) {
                 await handleMemeContestCommand(interaction, memeManager);
+            } else if (interaction.commandName === MEME_COMPLETE_CONTEST_COMMAND) {
+                await handleMemeCompleteContestCommand(interaction, memeManager);
             } else if (interaction.commandName === VOTE_TIMEOUT_COMMAND) {
                 await handleVoteTimeoutCommand(interaction, voteManager);
             } else if (interaction.commandName === CANCEL_VOTE_COMMAND) {

@@ -295,6 +295,110 @@ export class MemeManager {
         }
     }
 
+    // Debug/manual contest processing
+    async processSpecificContest(contest: MemeContest, client: any): Promise<void> {
+        console.log(`Manually processing contest: ${contest.id}`);
+
+        try {
+            // Find the meme channel
+            const memeChannel = client.channels.cache.find(
+                (ch: any) => ch.isTextBased() && ch.name === MEME_CHANNEL_NAME
+            );
+
+            if (!memeChannel) {
+                throw new Error(`Meme channel "${MEME_CHANNEL_NAME}" not found`);
+            }
+
+            // Fetch messages from the contest period
+            const messages = await this.fetchMessagesInRange(
+                memeChannel,
+                contest.startDate,
+                contest.endDate
+            );
+
+            console.log(`Found ${messages.length} messages in contest period`);
+
+            if (messages.length === 0) {
+                console.log(
+                    `No messages found for contest ${contest.id}, completing without winners`
+                );
+                await this.memeRepo.completeContest(contest.id);
+                return;
+            }
+
+            // Get top memes (laugh reactions)
+            const topMemes = await this.getTopMessages(messages, LAUGH_EMOJIS);
+            console.log(`Found ${topMemes.length} top memes`);
+
+            // Get top bones (bone reactions)
+            const topBones = await this.getTopMessages(messages, BONE_EMOJI);
+            console.log(`Found ${topBones.length} top bones`);
+
+            // Create meme winners
+            const memeWinners = topMemes.map((winner, index) => ({
+                id: `meme-${contest.id}-${index}`,
+                message: winner.message,
+                author: winner.message.author,
+                reactionCount: winner.count,
+                contestType: 'meme' as const,
+                weekStart: contest.startDate,
+                weekEnd: contest.endDate,
+                rank: index + 1,
+                submittedAt: winner.message.createdAt,
+            }));
+
+            // Create bone winners
+            const boneWinners = topBones.map((winner, index) => ({
+                id: `bone-${contest.id}-${index}`,
+                message: winner.message,
+                author: winner.message.author,
+                reactionCount: winner.count,
+                contestType: 'bone' as const,
+                weekStart: contest.startDate,
+                weekEnd: contest.endDate,
+                rank: index + 1,
+                submittedAt: winner.message.createdAt,
+            }));
+
+            // Complete the contest with both meme and bone winners
+            await this.completeContest(contest.id, [...memeWinners, ...boneWinners]);
+            console.log(
+                `Contest ${contest.id} completed with ${memeWinners.length} meme winners and ${boneWinners.length} bone winners`
+            );
+
+            // Announce winners in the contest channel
+            if (contest.channelId && (memeWinners.length > 0 || boneWinners.length > 0)) {
+                const contestChannel = client.channels.cache.get(contest.channelId);
+                if (contestChannel) {
+                    const period = `${new Date(
+                        contest.startDate
+                    ).toLocaleDateString()} - ${new Date(contest.endDate).toLocaleDateString()}`;
+
+                    if (memeWinners.length > 0) {
+                        const { createMemeWinnersEmbed } = await import('./meme-embed.js');
+                        const memeEmbed = createMemeWinnersEmbed(memeWinners, 'meme', period);
+                        await contestChannel.send({ embeds: [memeEmbed] });
+                        console.log(`Posted meme winners announcement`);
+                    }
+
+                    if (boneWinners.length > 0) {
+                        const { createMemeWinnersEmbed } = await import('./meme-embed.js');
+                        const boneEmbed = createMemeWinnersEmbed(boneWinners, 'bone', period);
+                        await contestChannel.send({ embeds: [boneEmbed] });
+                        console.log(`Posted bone winners announcement`);
+                    }
+                } else {
+                    console.warn(`Contest channel ${contest.channelId} not found in cache`);
+                }
+            }
+
+            console.log(`✅ Contest ${contest.id} completed successfully with manual processing`);
+        } catch (error) {
+            console.error(`Error in manual contest processing for ${contest.id}:`, error);
+            throw error;
+        }
+    }
+
     // Helper methods for automatic processing
     private async fetchMessagesInRange(
         channel: any,

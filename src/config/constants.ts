@@ -33,6 +33,7 @@ export const BONE_EMOJI = ['🦴'];
 export const MEME_OF_THE_YEAR_COMMAND = 'meme-of-the-year';
 export const MEME_STATS_COMMAND = 'meme-stats';
 export const MEME_CONTEST_COMMAND = 'meme-contest';
+export const MEME_COMPLETE_CONTEST_COMMAND = 'meme-complete-contest';
 export const VOTE_TIMEOUT_COMMAND = 'vote-timeout';
 export const CANCEL_VOTE_COMMAND = 'cancel-vote';
 

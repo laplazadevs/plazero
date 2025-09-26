@@ -385,11 +385,89 @@ export async function handleMemeContestCommand(
         await memeManager.updateContestMessageId(contest.id, message.id);
 
         await interaction.followUp({
-            content: `✅ Concurso de memes creado exitosamente! ID: \`${contest.id}\``,
+            content:
+                '✅ ¡Concurso creado! Los miembros pueden reaccionar con 😂, 🤣, o 🥇 en sus memes para ganar.',
             ephemeral: true,
         });
     } catch (error) {
         console.error('Error in handleMemeContestCommand:', error);
-        await interaction.editReply('❌ Hubo un error creando el concurso.');
+        await interaction.editReply('❌ Error al crear el concurso. Por favor intenta de nuevo.');
+    }
+}
+
+export async function handleMemeCompleteContestCommand(
+    interaction: ChatInputCommandInteraction,
+    memeManager: MemeManager
+): Promise<void> {
+    // Check if user has admin permissions
+    if (!interaction.memberPermissions?.has(['Administrator'])) {
+        await interaction.reply({
+            content: '❌ Solo los administradores pueden usar este comando.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    await interaction.deferReply();
+
+    try {
+        const contestId = interaction.options.getString('contest-id', true);
+
+        // Get the contest to debug
+        const contest = await memeManager.getContest(contestId);
+        if (!contest) {
+            await interaction.editReply('❌ Concurso no encontrado.');
+            return;
+        }
+
+        // Force process this specific contest
+        const client = interaction.client;
+
+        // Debug: Show contest details
+        await interaction.editReply(
+            `🔍 **Debug del Concurso**\n` +
+                `**ID:** ${contest.id}\n` +
+                `**Estado:** ${contest.status}\n` +
+                `**Tipo:** ${contest.type}\n` +
+                `**Inicio:** ${contest.startDate.toISOString()}\n` +
+                `**Fin:** ${contest.endDate.toISOString()}\n` +
+                `**Canal ID:** ${contest.channelId}\n` +
+                `**Ahora:** ${new Date().toISOString()}\n\n` +
+                `🔄 Intentando procesar...`
+        );
+
+        // Try to find the meme channel
+        const MEME_CHANNEL_NAME = '🤣︱memes';
+        const memeChannel = client.channels.cache.find(
+            (ch: any) => ch.isTextBased() && ch.name === MEME_CHANNEL_NAME
+        );
+
+        if (!memeChannel) {
+            await interaction.editReply(
+                `❌ **Error:** Canal "${MEME_CHANNEL_NAME}" no encontrado en la cache.\n\n` +
+                    `**Canales disponibles:**\n` +
+                    client.channels.cache
+                        .filter((ch: any) => ch.isTextBased())
+                        .map((ch: any) => `- ${ch.name} (${ch.id})`)
+                        .slice(0, 10)
+                        .join('\n')
+            );
+            return;
+        }
+
+        // Force complete the contest
+        await memeManager.processSpecificContest(contest, client);
+
+        await interaction.editReply(
+            `✅ **Concurso procesado exitosamente!**\n\n` +
+                `El concurso ${contestId} ha sido forzado a completarse.`
+        );
+    } catch (error) {
+        console.error('Error in handleMemeCompleteContestCommand:', error);
+        await interaction.editReply(
+            `❌ **Error al procesar el concurso:**\n\`\`\`${
+                error instanceof Error ? error.message : String(error)
+            }\`\`\``
+        );
     }
 }
