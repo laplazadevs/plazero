@@ -88,6 +88,17 @@ export async function handleVoteReactionAdd(
             await voteManager.ensureUserExists(user);
             const weight = await getVoteWeight(guild, user.id);
 
+            // Remove other reactions from the message to prevent multiple voting
+            try {
+                const downReaction = message.reactions.cache.get('👎');
+                const whiteReaction = message.reactions.cache.get('⬜');
+
+                if (downReaction) await downReaction.users.remove(user.id);
+                if (whiteReaction) await whiteReaction.users.remove(user.id);
+            } catch (error) {
+                console.error('Error removing other reactions:', error);
+            }
+
             // Update database
             await voteManager.addVoteReaction(vote.id, user.id, 'up', weight);
             await voteManager.removeVoteReaction(vote.id, user.id, 'down');
@@ -104,6 +115,17 @@ export async function handleVoteReactionAdd(
             // Ensure user exists in database before adding reaction
             await voteManager.ensureUserExists(user);
             const weight = await getVoteWeight(guild, user.id);
+
+            // Remove other reactions from the message to prevent multiple voting
+            try {
+                const downReaction = message.reactions.cache.get('👎');
+                const whiteReaction = message.reactions.cache.get('⬜');
+
+                if (downReaction) await downReaction.users.remove(user.id);
+                if (whiteReaction) await whiteReaction.users.remove(user.id);
+            } catch (error) {
+                console.error('Error removing other reactions:', error);
+            }
 
             // Update database
             await voteManager.addVoteReaction(vote.id, user.id, 'down', weight);
@@ -194,6 +216,17 @@ async function handleTibioReaction(
                 let consecutiveWhiteVotes = 1;
 
                 if (vote) {
+                    // Remove other reactions from the message to prevent multiple voting
+                    try {
+                        const downReaction = reaction.message.reactions.cache.get('👎');
+                        const whiteReaction = reaction.message.reactions.cache.get('⬜');
+
+                        if (downReaction) await downReaction.users.remove(user.id);
+                        if (whiteReaction) await whiteReaction.users.remove(user.id);
+                    } catch (error) {
+                        console.error('Error removing other reactions:', error);
+                    }
+
                     // Get current consecutive white vote count for this user
                     consecutiveWhiteVotes = (vote.whiteVotes.get(user.id) || 0) + 1;
 
@@ -204,9 +237,13 @@ async function handleTibioReaction(
                         'white',
                         consecutiveWhiteVotes
                     );
+                    await voteManager.removeVoteReaction(vote.id, user.id, 'up');
+                    await voteManager.removeVoteReaction(vote.id, user.id, 'down');
 
                     // Update local vote object
                     vote.whiteVotes.set(user.id, consecutiveWhiteVotes);
+                    vote.upVotes.delete(user.id);
+                    vote.downVotes.delete(user.id);
                 }
 
                 // Calculate exponential timeout: 1 minute * 10^(consecutive_votes - 1)

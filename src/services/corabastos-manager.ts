@@ -248,6 +248,12 @@ export class CorabastosManager {
         const currentHour = now.hour();
         const currentMinute = now.minute();
 
+        // Only process notifications on Fridays (day 5)
+        // Corabastos sessions are meant to happen only on Fridays
+        if (now.day() !== 5) {
+            return;
+        }
+
         // Check for pre-session agenda notification (11:50 AM - 10 minutes before Turno 0)
         if (currentHour === 11 && currentMinute === 50) {
             await this.sendPreSessionAgendaNotification(client, session);

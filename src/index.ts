@@ -39,7 +39,7 @@ import { handleMemeButtonInteraction } from './handlers/meme-interactions.js';
 import { handleCancelVoteCommand, handleVoteTimeoutCommand } from './handlers/vote-commands.js';
 import { completeVote, setDiscordClientForCompletion } from './handlers/vote-completion.js';
 import { handleVoteReactionAdd, handleVoteReactionRemove } from './handlers/vote-reactions.js';
-import { setDiscordClient } from './handlers/vote-updates.js';
+import { setDiscordClient, updateVoteMessage } from './handlers/vote-updates.js';
 import { handleMemberJoin } from './handlers/welcome-handler.js';
 import { handleWelcomeButtonInteraction } from './handlers/welcome-interactions.js';
 import { handleWelcomeMessage } from './handlers/welcome-messages.js';
@@ -79,7 +79,7 @@ const corabastosManager = new CorabastosManager();
 setDiscordClient(client);
 setDiscordClientForCompletion(client);
 
-// Set up periodic vote completion check (every 30 seconds)
+// Set up periodic vote completion check and embed updates (every 30 seconds)
 setInterval(async () => {
     try {
         const activeVotes = await voteManager.getAllActiveVotes();
@@ -90,6 +90,9 @@ setInterval(async () => {
             if (timeElapsed >= VOTE_DURATION_MS) {
                 console.log(`Found expired vote ${vote.id}, completing it`);
                 await completeVote(vote.id, voteManager);
+            } else {
+                // Update the embed to show correct time remaining
+                await updateVoteMessage(vote);
             }
         }
     } catch (error) {
