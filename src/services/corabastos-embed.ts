@@ -1,5 +1,8 @@
 import dayjs from 'dayjs';
+import timezone from 'dayjs/plugin/timezone.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, User } from 'discord.js';
+
+dayjs.extend(timezone);
 
 import {
     CORABASTOS_CALENDAR_EMOJI,
@@ -249,9 +252,9 @@ export function createCorabastosStatusEmbed(
         );
 
         if (currentSession.scheduledTime) {
-            const scheduledTime = dayjs(currentSession.scheduledTime).format(
-                'dddd, MMM DD [at] h:mm A'
-            );
+            const scheduledTime = dayjs(currentSession.scheduledTime)
+                .tz('America/Bogota')
+                .format('dddd, MMM DD [at] h:mm A');
             embed.addFields({
                 name: `${CORABASTOS_CLOCK_EMOJI} Programado`,
                 value: scheduledTime,

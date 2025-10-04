@@ -121,6 +121,9 @@ const commands = [
         .setName('corabastos-estado')
         .setDescription('Muestra el estado actual del corabastos'),
     new SlashCommandBuilder()
+        .setName('corabastos-crear-sesion')
+        .setDescription('Crea manualmente una sesión de corabastos (solo administradores)'),
+    new SlashCommandBuilder()
         .setName('meme-complete-contest')
         .setDescription('Fuerza la finalización manual de un concurso de memes (admin only)')
         .addStringOption(option =>

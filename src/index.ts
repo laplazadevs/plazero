@@ -9,6 +9,7 @@ import { Client, Events, GatewayIntentBits, Message } from 'discord.js';
 import {
     CANCEL_VOTE_COMMAND,
     CORABASTOS_AGENDA_COMMAND,
+    CORABASTOS_CREATE_SESSION_COMMAND,
     CORABASTOS_EMERGENCY_COMMAND,
     CORABASTOS_STATUS_COMMAND,
     MEME_COMPLETE_CONTEST_COMMAND,
@@ -22,6 +23,7 @@ import {
     handleCorabastosAgendaCommand,
     handleCorabastosEmergencyCommand,
     handleCorabastosStatusCommand,
+    handleCreateCorabastosSession,
 } from './handlers/corabastos-commands.js';
 import {
     handleCorabastosButtonInteraction,
@@ -216,6 +218,8 @@ client.on(Events.InteractionCreate, async interaction => {
                 await handleCorabastosEmergencyCommand(interaction, corabastosManager);
             } else if (interaction.commandName === CORABASTOS_STATUS_COMMAND) {
                 await handleCorabastosStatusCommand(interaction, corabastosManager);
+            } else if (interaction.commandName === CORABASTOS_CREATE_SESSION_COMMAND) {
+                await handleCreateCorabastosSession(interaction, corabastosManager);
             }
         } else if (interaction.isButton()) {
             if (interaction.customId.startsWith('welcome_')) {

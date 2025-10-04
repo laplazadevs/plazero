@@ -41,6 +41,7 @@ export const CANCEL_VOTE_COMMAND = 'cancel-vote';
 export const CORABASTOS_AGENDA_COMMAND = 'corabastos-agenda';
 export const CORABASTOS_EMERGENCY_COMMAND = 'corabastos-emergencia';
 export const CORABASTOS_STATUS_COMMAND = 'corabastos-estado';
+export const CORABASTOS_CREATE_SESSION_COMMAND = 'corabastos-crear-sesion';
 
 // Voting system configuration
 export const VOTE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
