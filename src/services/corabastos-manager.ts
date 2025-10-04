@@ -570,15 +570,15 @@ export class CorabastosManager {
 
     private getNextFridayAtNoon(): Date {
         const now = dayjs().tz('America/Bogota');
-        let friday = now.day(5).hour(CORABASTOS_FRIDAY_HOUR).minute(0).second(0).millisecond(0);
-
-        // If it's already past Friday noon this week, get next Friday
-        if (friday.isBefore(now)) {
-            friday = friday.add(1, 'week');
+        const currentWeekFriday = now.startOf('week').add(4, 'day').hour(CORABASTOS_FRIDAY_HOUR).minute(0).second(0).millisecond(0);
+        
+        // If current week's Friday hasn't passed yet, use it
+        if (currentWeekFriday.isAfter(now)) {
+            return currentWeekFriday.utc().toDate();
         }
-
-        // Convert to UTC to ensure consistent database storage
-        return friday.utc().toDate();
+        
+        // Otherwise, use next week's Friday
+        return currentWeekFriday.add(1, 'week').utc().toDate();
     }
 
     // Mapping functions

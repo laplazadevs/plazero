@@ -1,3 +1,5 @@
+import dayjs from 'dayjs';
+import timezone from 'dayjs/plugin/timezone.js';
 import { User } from 'discord.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -5,6 +7,8 @@ import { BONE_EMOJI, LAUGH_EMOJIS, MEME_CHANNEL_NAME } from '../config/constants
 import { MemeRepository } from '../repositories/meme-repository.js';
 import { UserRepository } from '../repositories/user-repository.js';
 import { MemeContest, MemeData, MemeStats } from '../types/meme.js';
+
+dayjs.extend(timezone);
 
 export class MemeManager {
     private memeRepo: MemeRepository;
@@ -188,7 +192,7 @@ export class MemeManager {
     // Automatic contest completion
     async processExpiredContests(client: any): Promise<void> {
         const activeContests = await this.getActiveContests();
-        const now = new Date();
+        const now = dayjs().tz('America/Bogota').toDate();
 
         for (const contest of activeContests) {
             if (contest.endDate <= now) {
