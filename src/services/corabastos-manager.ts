@@ -587,6 +587,104 @@ export class CorabastosManager {
         return currentWeekFriday.add(1, 'week').utc().toDate();
     }
 
+    // Automatic weekly session creation
+    public async createWeeklySessionIfNeeded(client: any): Promise<void> {
+        try {
+            console.log('Checking if weekly corabastos session needs to be created...');
+
+            // Check if there's already a session for the current week
+            const existingSession = await this.getCurrentWeekSession();
+            if (existingSession) {
+                console.log(
+                    `Weekly session already exists for current week: ${existingSession.id}`
+                );
+                return;
+            }
+
+            // Create the bot user for session creation
+            const botUser = client.user;
+            if (!botUser) {
+                console.warn('Bot user not available for session creation');
+                return;
+            }
+
+            // Create new weekly session
+            const { weekStart, weekEnd } = this.getCurrentWeekRange();
+            const scheduledTime = this.getNextFridayAtNoon();
+
+            console.log(`Creating new weekly corabastos session:`);
+            console.log(`- Week: ${weekStart.toISOString()} to ${weekEnd.toISOString()}`);
+            console.log(`- Scheduled: ${scheduledTime.toISOString()}`);
+
+            const sessionData = await this.repository.createSession(
+                weekStart,
+                weekEnd,
+                'regular',
+                scheduledTime,
+                botUser
+            );
+
+            const session = this.mapSessionDataToSession(sessionData);
+
+            console.log(`✅ Created weekly corabastos session: ${session.id}`);
+
+            // Optionally announce the new session in general channel
+            const guild = client.guilds.cache.first();
+            if (guild) {
+                const generalChannel = await this.findGeneralChannel(guild);
+                if (generalChannel) {
+                    const scheduledTimeFormatted = dayjs(scheduledTime)
+                        .tz('America/Bogota')
+                        .format('dddd, MMM DD [at] h:mm A');
+
+                    await generalChannel.send({
+                        content:
+                            `📅 **Nueva semana, nuevo Corabastos!**\n\n` +
+                            `Se ha creado automáticamente la sesión de corabastos para esta semana.\n` +
+                            `📍 **Programado para:** ${scheduledTimeFormatted}\n\n` +
+                            `¡Usa \`/corabastos-agenda agregar\` para añadir temas a la agenda!`,
+                    });
+
+                    console.log('Posted weekly session announcement to general channel');
+                }
+            }
+        } catch (error) {
+            console.error('Error creating weekly corabastos session:', error);
+        }
+    }
+
+    // Manual trigger for testing - can be called via admin command if needed
+    public async forceCreateWeeklySession(client: any): Promise<CorabastosSession | null> {
+        try {
+            console.log('Force creating weekly corabastos session...');
+
+            const botUser = client.user;
+            if (!botUser) {
+                console.warn('Bot user not available for session creation');
+                return null;
+            }
+
+            const { weekStart, weekEnd } = this.getCurrentWeekRange();
+            const scheduledTime = this.getNextFridayAtNoon();
+
+            const sessionData = await this.repository.createSession(
+                weekStart,
+                weekEnd,
+                'regular',
+                scheduledTime,
+                botUser
+            );
+
+            const session = this.mapSessionDataToSession(sessionData);
+            console.log(`✅ Force created weekly corabastos session: ${session.id}`);
+
+            return session;
+        } catch (error) {
+            console.error('Error force creating weekly corabastos session:', error);
+            return null;
+        }
+    }
+
     // Mapping functions
     private mapSessionDataToSession(data: CorabastosSessionData): CorabastosSession {
         return {

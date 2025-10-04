@@ -167,6 +167,23 @@ client.once('ready', () => {
     );
     turnoNotificationJob.start();
 
+    // Schedule weekly corabastos session creation at Saturday midnight (start of new week)
+    const weeklySessionCreationJob = new CronJob(
+        '0 0 * * 6', // At 00:00 on Saturday (start of new week)
+        async () => {
+            console.log('Creating weekly corabastos session...');
+            try {
+                await corabastosManager.createWeeklySessionIfNeeded(client);
+            } catch (error) {
+                console.error('Error creating weekly corabastos session:', error);
+            }
+        },
+        null, // onComplete
+        true, // start
+        'America/Bogota' // timeZone
+    );
+    weeklySessionCreationJob.start();
+
     // Run database cleanup every hour
     setInterval(async () => {
         try {
