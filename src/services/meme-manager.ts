@@ -72,27 +72,49 @@ export class MemeManager {
     }
 
     async completeContest(contestId: string, winners: MemeData[]): Promise<boolean> {
-        const contest = await this.getContest(contestId);
-        if (!contest || contest.status !== 'active') return false;
+        try {
+            console.log(`completeContest: Starting for contest ${contestId} with ${winners.length} winners`);
+            
+            const contest = await this.getContest(contestId);
+            if (!contest) {
+                console.log(`completeContest: Contest ${contestId} not found`);
+                return false;
+            }
+            if (contest.status !== 'active') {
+                console.log(`completeContest: Contest ${contestId} status is ${contest.status}, not active`);
+                return false;
+            }
 
-        // Convert winners to database format
-        const winnerData = winners.map(winner => ({
-            id: winner.id,
-            contest_id: contestId,
-            message_id: winner.message.id,
-            author_id: winner.author.id,
-            reaction_count: winner.reactionCount,
-            contest_type: winner.contestType,
-            rank: winner.rank || 0,
-            week_start: winner.weekStart,
-            week_end: winner.weekEnd,
-            submitted_at: winner.submittedAt,
-        }));
+            console.log(`completeContest: Converting ${winners.length} winners to database format`);
+            // Convert winners to database format
+            const winnerData = winners.map((winner, index) => {
+                console.log(`completeContest: Processing winner ${index + 1}: ${winner.author.username} (${winner.contestType})`);
+                return {
+                    id: winner.id,
+                    contest_id: contestId,
+                    message_id: winner.message.id,
+                    author_id: winner.author.id,
+                    reaction_count: winner.reactionCount,
+                    contest_type: winner.contestType,
+                    rank: winner.rank || 0,
+                    week_start: winner.weekStart,
+                    week_end: winner.weekEnd,
+                    submitted_at: winner.submittedAt,
+                };
+            });
 
-        await this.memeRepo.addMemeWinners(winnerData);
-        await this.memeRepo.completeContest(contestId);
+            console.log(`completeContest: Adding ${winnerData.length} winners to database`);
+            await this.memeRepo.addMemeWinners(winnerData);
+            
+            console.log(`completeContest: Marking contest ${contestId} as completed`);
+            await this.memeRepo.completeContest(contestId);
 
-        return true;
+            console.log(`completeContest: Successfully completed contest ${contestId}`);
+            return true;
+        } catch (error) {
+            console.error(`completeContest ERROR for ${contestId}:`, error);
+            throw error;
+        }
     }
 
     // Meme data management
@@ -386,9 +408,22 @@ export class MemeManager {
             console.log(
                 `Step 9: Completing contest with ${memeWinners.length} meme winners and ${boneWinners.length} bone winners`
             );
-            // Complete the contest with both meme and bone winners
-            await this.completeContest(contest.id, [...memeWinners, ...boneWinners]);
-            console.log(`Step 10: Contest ${contest.id} database completion successful`);
+            
+            try {
+                // Complete the contest with both meme and bone winners
+                const allWinners = [...memeWinners, ...boneWinners];
+                console.log(`Step 9.1: Calling completeContest with ${allWinners.length} total winners`);
+                
+                const success = await this.completeContest(contest.id, allWinners);
+                console.log(`Step 10: Contest ${contest.id} database completion result: ${success}`);
+                
+                if (!success) {
+                    throw new Error('Contest completion returned false');
+                }
+            } catch (error) {
+                console.error(`Step 9 ERROR: Failed to complete contest ${contest.id}:`, error);
+                throw error;
+            }
 
             // Announce winners in the contest channel
             if (contest.channelId && (memeWinners.length > 0 || boneWinners.length > 0)) {
