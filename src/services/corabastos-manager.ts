@@ -562,10 +562,33 @@ export class CorabastosManager {
     // Utility methods
     private getCurrentWeekRange(): { weekStart: Date; weekEnd: Date } {
         const now = dayjs().tz('America/Bogota');
-        const weekStart = now.startOf('week').utc().toDate(); // Monday
-        const weekEnd = now.endOf('week').utc().toDate(); // Sunday
 
-        return { weekStart, weekEnd };
+        // Corabastos week runs from Saturday 00:01 to Friday 23:59
+        // This ensures Saturday midnight cron job creates sessions for the new week
+        let weekStart: dayjs.Dayjs;
+        let weekEnd: dayjs.Dayjs;
+
+        // If today is Saturday, we're starting a new corabastos week
+        if (now.day() === 6) {
+            // Saturday
+            weekStart = now.hour(0).minute(1).second(0).millisecond(0);
+            weekEnd = now.add(6, 'day').hour(23).minute(59).second(59).millisecond(999); // Next Friday
+        } else {
+            // Find the most recent Saturday (start of current corabastos week)
+            const daysSinceSaturday = (now.day() + 1) % 7; // Days since last Saturday
+            weekStart = now
+                .subtract(daysSinceSaturday, 'day')
+                .hour(0)
+                .minute(1)
+                .second(0)
+                .millisecond(0);
+            weekEnd = weekStart.add(6, 'day').hour(23).minute(59).second(59).millisecond(999); // Following Friday
+        }
+
+        return {
+            weekStart: weekStart.utc().toDate(),
+            weekEnd: weekEnd.utc().toDate(),
+        };
     }
 
     private getNextFridayAtNoon(): Date {
