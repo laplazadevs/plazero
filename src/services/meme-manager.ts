@@ -73,22 +73,30 @@ export class MemeManager {
 
     async completeContest(contestId: string, winners: MemeData[]): Promise<boolean> {
         try {
-            console.log(`completeContest: Starting for contest ${contestId} with ${winners.length} winners`);
-            
+            console.log(
+                `completeContest: Starting for contest ${contestId} with ${winners.length} winners`
+            );
+
             const contest = await this.getContest(contestId);
             if (!contest) {
                 console.log(`completeContest: Contest ${contestId} not found`);
                 return false;
             }
             if (contest.status !== 'active') {
-                console.log(`completeContest: Contest ${contestId} status is ${contest.status}, not active`);
+                console.log(
+                    `completeContest: Contest ${contestId} status is ${contest.status}, not active`
+                );
                 return false;
             }
 
             console.log(`completeContest: Converting ${winners.length} winners to database format`);
             // Convert winners to database format
             const winnerData = winners.map((winner, index) => {
-                console.log(`completeContest: Processing winner ${index + 1}: ${winner.author.username} (${winner.contestType})`);
+                console.log(
+                    `completeContest: Processing winner ${index + 1}: ${winner.author.username} (${
+                        winner.contestType
+                    })`
+                );
                 return {
                     id: winner.id,
                     contest_id: contestId,
@@ -105,7 +113,7 @@ export class MemeManager {
 
             console.log(`completeContest: Adding ${winnerData.length} winners to database`);
             await this.memeRepo.addMemeWinners(winnerData);
-            
+
             console.log(`completeContest: Marking contest ${contestId} as completed`);
             await this.memeRepo.completeContest(contestId);
 
@@ -314,6 +322,11 @@ export class MemeManager {
                     console.log(
                         `✅ Contest ${contest.id} completed with ${memeWinners.length} meme winners and ${boneWinners.length} bone winners`
                     );
+
+                    // Auto-create next week's contest if this was a weekly contest
+                    if (contest.type === 'weekly') {
+                        await this.createNextWeeklyContest(contest, client);
+                    }
                 } catch (error) {
                     console.error(`Error processing contest ${contest.id}:`, error);
                     console.error(`Error details:`, {
@@ -408,15 +421,19 @@ export class MemeManager {
             console.log(
                 `Step 9: Completing contest with ${memeWinners.length} meme winners and ${boneWinners.length} bone winners`
             );
-            
+
             try {
                 // Complete the contest with both meme and bone winners
                 const allWinners = [...memeWinners, ...boneWinners];
-                console.log(`Step 9.1: Calling completeContest with ${allWinners.length} total winners`);
-                
+                console.log(
+                    `Step 9.1: Calling completeContest with ${allWinners.length} total winners`
+                );
+
                 const success = await this.completeContest(contest.id, allWinners);
-                console.log(`Step 10: Contest ${contest.id} database completion result: ${success}`);
-                
+                console.log(
+                    `Step 10: Contest ${contest.id} database completion result: ${success}`
+                );
+
                 if (!success) {
                     throw new Error('Contest completion returned false');
                 }
@@ -452,9 +469,92 @@ export class MemeManager {
             }
 
             console.log(`✅ Contest ${contest.id} completed successfully with manual processing`);
+
+            // Auto-create next week's contest if this was a weekly contest
+            if (contest.type === 'weekly') {
+                await this.createNextWeeklyContest(contest, client);
+            }
         } catch (error) {
             console.error(`Error in manual contest processing for ${contest.id}:`, error);
             throw error;
+        }
+    }
+
+    // Auto-create next week's contest
+    private async createNextWeeklyContest(
+        completedContest: MemeContest,
+        client: any
+    ): Promise<void> {
+        try {
+            console.log(`Creating next week's contest after completing ${completedContest.id}`);
+
+            // Import the utility function
+            const { getNextFridayAtNoon } = await import('../utils/meme-utils.js');
+
+            // Calculate next week's dates (Friday to Friday)
+            const nextStartDate = getNextFridayAtNoon().utc().toDate();
+            const nextEndDate = getNextFridayAtNoon().add(1, 'week').utc().toDate();
+
+            console.log(
+                `Next contest dates: ${nextStartDate.toISOString()} to ${nextEndDate.toISOString()}`
+            );
+
+            // Check if there's already an active contest for next week
+            const activeContests = await this.getActiveContests();
+            const hasNextWeekContest = activeContests.some(contest => {
+                const contestStart = new Date(contest.startDate);
+                const nextStart = new Date(nextStartDate);
+                return Math.abs(contestStart.getTime() - nextStart.getTime()) < 24 * 60 * 60 * 1000; // Within 24 hours
+            });
+
+            if (hasNextWeekContest) {
+                console.log('Next week contest already exists, skipping auto-creation');
+                return;
+            }
+
+            // Create the bot user for contest creation
+            const botUser = client.user;
+            if (!botUser) {
+                console.warn('Bot user not available for contest creation');
+                return;
+            }
+
+            // Create next week's contest
+            const nextContest = await this.createContest(
+                'weekly',
+                nextStartDate,
+                nextEndDate,
+                completedContest.channelId,
+                botUser
+            );
+
+            // Post announcement in the same channel where the completed contest was
+            const contestChannel = client.channels.cache.get(completedContest.channelId);
+            if (contestChannel) {
+                const { createMemeContestEmbed, createMemeContestButtonRow } = await import(
+                    './meme-embed.js'
+                );
+                const embed = createMemeContestEmbed(nextContest);
+                const buttonRow = createMemeContestButtonRow(nextContest);
+
+                const message = await contestChannel.send({
+                    content: '🎉 **¡Nuevo concurso semanal iniciado automáticamente!**',
+                    embeds: [embed],
+                    components: [buttonRow],
+                });
+
+                // Update contest with message ID
+                await this.updateContestMessageId(nextContest.id, message.id);
+
+                console.log(`✅ Auto-created next week's contest: ${nextContest.id}`);
+            } else {
+                console.warn(
+                    `Contest channel ${completedContest.channelId} not found for next week announcement`
+                );
+            }
+        } catch (error) {
+            console.error('Error creating next week\'s contest:', error);
+            // Don't throw - we don't want to break the completion process if auto-creation fails
         }
     }
 
