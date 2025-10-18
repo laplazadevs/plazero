@@ -595,7 +595,7 @@ export class CorabastosManager {
         const now = dayjs().tz('America/Bogota');
         const currentWeekFriday = now
             .startOf('week')
-            .add(4, 'day')
+            .add(5, 'day')
             .hour(CORABASTOS_FRIDAY_HOUR)
             .minute(0)
             .second(0)
