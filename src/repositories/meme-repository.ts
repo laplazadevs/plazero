@@ -104,9 +104,14 @@ export class MemeRepository {
     public async addMemeWinners(winners: MemeWinnerData[]): Promise<void> {
         if (winners.length === 0) return;
 
+        console.log(`addMemeWinners: Starting transaction for ${winners.length} winners`);
         return await this.db.transaction(async client => {
+            console.log(`addMemeWinners: Transaction started successfully`);
             // Ensure all authors exist in database
             const authorIds = [...new Set(winners.map(w => w.author_id))];
+            console.log(
+                `addMemeWinners: Ensuring ${authorIds.length} unique authors exist in database`
+            );
             for (const authorId of authorIds) {
                 // We'll need to fetch the user from Discord API or pass it in
                 // For now, we'll create a minimal user record
@@ -119,8 +124,10 @@ export class MemeRepository {
                     [authorId]
                 );
             }
+            console.log(`addMemeWinners: Successfully ensured all authors exist`);
 
             // Insert winners
+            console.log(`addMemeWinners: Inserting ${winners.length} winners into database`);
             for (const winner of winners) {
                 const query = `
                     INSERT INTO meme_winners (
@@ -133,6 +140,9 @@ export class MemeRepository {
                         rank = EXCLUDED.rank
                 `;
 
+                console.log(
+                    `addMemeWinners: Inserting winner ${winner.id} (${winner.contest_type})`
+                );
                 await client.query(query, [
                     winner.id,
                     winner.contest_id,
@@ -146,13 +156,17 @@ export class MemeRepository {
                     winner.submitted_at,
                 ]);
             }
+            console.log(`addMemeWinners: Successfully inserted all ${winners.length} winners`);
 
             // Update user statistics
-            await this.updateUserStats(winners);
+            console.log(`addMemeWinners: Updating user statistics for ${winners.length} winners`);
+            await this.updateUserStats(client, winners);
+            console.log(`addMemeWinners: Successfully updated user statistics`);
+            console.log(`addMemeWinners: Transaction completed successfully`);
         });
     }
 
-    private async updateUserStats(winners: MemeWinnerData[]): Promise<void> {
+    private async updateUserStats(client: any, winners: MemeWinnerData[]): Promise<void> {
         const userStats = new Map<string, { memeWins: number; boneWins: number }>();
 
         for (const winner of winners) {
@@ -167,7 +181,7 @@ export class MemeRepository {
 
         for (const [userId, stats] of userStats.entries()) {
             // Ensure user exists before updating stats
-            await this.db.query(
+            await client.query(
                 `
                 INSERT INTO users (id, username, updated_at)
                 VALUES ($1, 'Unknown', NOW())
@@ -186,7 +200,7 @@ export class MemeRepository {
                     updated_at = NOW()
             `;
 
-            await this.db.query(query, [userId, stats.memeWins, stats.boneWins]);
+            await client.query(query, [userId, stats.memeWins, stats.boneWins]);
         }
     }
 

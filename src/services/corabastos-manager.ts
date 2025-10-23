@@ -241,6 +241,9 @@ export class CorabastosManager {
     public async processActiveSessionTurnos(client: any): Promise<void> {
         const session = await this.getCurrentWeekSession();
         if (!session || session.status !== 'scheduled') {
+            console.log(
+                `processActiveSessionTurnos: No scheduled session found or session status is ${session?.status}`
+            );
             return; // Only process scheduled sessions
         }
 
@@ -251,26 +254,41 @@ export class CorabastosManager {
         // Only process notifications on Fridays (day 5)
         // Corabastos sessions are meant to happen only on Fridays
         if (now.day() !== 5) {
+            console.log(
+                `processActiveSessionTurnos: Not Friday (current day: ${now.day()}), skipping`
+            );
             return;
         }
 
         // Check for pre-session agenda notification (11:50 AM - 10 minutes before Turno 0)
         if (currentHour === 11 && currentMinute === 50) {
+            console.log(
+                `processActiveSessionTurnos: Pre-session notification time (11:50 AM), sending agenda notification`
+            );
             await this.sendPreSessionAgendaNotification(client, session);
             return;
         }
 
         // Only process turno notifications at the exact start of each hour (minute 0)
         if (currentMinute !== 0) {
+            console.log(
+                `processActiveSessionTurnos: Not at minute 0 (current minute: ${currentMinute}), skipping turno notifications`
+            );
             return;
         }
 
         // Check if we're in a valid turno time (12 PM to 10 PM)
         if (currentHour < 12 || currentHour > 22) {
+            console.log(
+                `processActiveSessionTurnos: Not in valid turno time (current hour: ${currentHour}), skipping`
+            );
             return;
         }
 
         const currentTurno = currentHour - 12; // Turno 0 = 12 PM, Turno 1 = 1 PM, etc.
+        console.log(
+            `processActiveSessionTurnos: Processing turno ${currentTurno} at ${currentHour}:${currentMinute}`
+        );
 
         // Get agenda items for current turno
         const agendaItems = await this.repository.getSessionAgenda(session.id);
@@ -278,13 +296,30 @@ export class CorabastosManager {
             item => item.turno === currentTurno && item.status === 'confirmed'
         );
 
+        console.log(
+            `processActiveSessionTurnos: Found ${currentTurnoItems.length} confirmed items for turno ${currentTurno}`
+        );
         if (currentTurnoItems.length === 0) {
+            console.log(
+                `processActiveSessionTurnos: No confirmed agenda items for turno ${currentTurno}, skipping`
+            );
             return;
         }
 
         // Check if we already notified for this turno today
         const today = now.startOf('day').toDate();
-        if (await this.repository.hasNotificationBeenSent(session.id, currentTurno, today)) {
+        const alreadyNotified = await this.repository.hasNotificationBeenSent(
+            session.id,
+            currentTurno,
+            today
+        );
+        console.log(
+            `processActiveSessionTurnos: Already notified for turno ${currentTurno} today: ${alreadyNotified}`
+        );
+        if (alreadyNotified) {
+            console.log(
+                `processActiveSessionTurnos: Notification already sent for turno ${currentTurno} today, skipping`
+            );
             return;
         }
 

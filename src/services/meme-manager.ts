@@ -113,9 +113,13 @@ export class MemeManager {
 
             console.log(`completeContest: Adding ${winnerData.length} winners to database`);
             await this.memeRepo.addMemeWinners(winnerData);
+            console.log(
+                `completeContest: Successfully added ${winnerData.length} winners to database`
+            );
 
             console.log(`completeContest: Marking contest ${contestId} as completed`);
             await this.memeRepo.completeContest(contestId);
+            console.log(`completeContest: Successfully marked contest ${contestId} as completed`);
 
             console.log(`completeContest: Successfully completed contest ${contestId}`);
             return true;
@@ -553,7 +557,7 @@ export class MemeManager {
                 );
             }
         } catch (error) {
-            console.error('Error creating next week\'s contest:', error);
+            console.error("Error creating next week's contest:", error);
             // Don't throw - we don't want to break the completion process if auto-creation fails
         }
     }
