@@ -492,12 +492,12 @@ export class MemeManager {
         try {
             console.log(`Creating next week's contest after completing ${completedContest.id}`);
 
-            // Import the utility function
-            const { getNextFridayAtNoon } = await import('../utils/meme-utils.js');
+            // Import the utility functions
+            const { getCurrentFridayAtNoon, getNextFridayAtNoon } = await import('../utils/meme-utils.js');
 
             // Calculate next week's dates (Friday to Friday)
-            const nextStartDate = getNextFridayAtNoon().utc().toDate();
-            const nextEndDate = getNextFridayAtNoon().add(1, 'week').utc().toDate();
+            const nextStartDate = getCurrentFridayAtNoon().utc().toDate();
+            const nextEndDate = getNextFridayAtNoon().utc().toDate();
 
             console.log(
                 `Next contest dates: ${nextStartDate.toISOString()} to ${nextEndDate.toISOString()}`
