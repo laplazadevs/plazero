@@ -1,8 +1,8 @@
 {
     "compilerOptions": {
-        "target": "es2020",
-        "module": "ESNext",
-        "moduleResolution": "node",
+        "target": "es2022",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
         "outDir": "./dist",
         "strict": true,
         "esModuleInterop": true,
@@ -11,9 +11,5 @@
         "forceConsistentCasingInFileNames": true
     },
     "include": ["./src/**/*"],
-    "exclude": ["node_modules", "dist"],
-    "ts-node": {
-        "esm": true,
-        "experimentalSpecifierResolution": "node"
-    }
+    "exclude": ["node_modules", "dist"]
 }

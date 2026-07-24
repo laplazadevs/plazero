@@ -1,49 +1,48 @@
 import { GuildMember, TextChannel } from 'discord.js';
+import { Effect } from 'effect';
 
 import { WELCOME_CHANNEL_NAME } from '../config/constants.js';
+import { discordCall } from '../discord/DiscordClient.js';
 import { createWelcomeButtonRow, createWelcomeEmbed } from '../services/welcome-embed.js';
 import { WelcomeManager } from '../services/welcome-manager.js';
 
-export async function handleMemberJoin(
-    member: GuildMember,
-    welcomeManager: WelcomeManager
-): Promise<void> {
-    try {
-        // Find the welcome channel
+export const handleMemberJoin = Effect.fn('handleMemberJoin')(function* (member: GuildMember) {
+    const welcomeManager = yield* WelcomeManager;
+
+    yield* Effect.gen(function* () {
         const welcomeChannel = member.guild.channels.cache.find(
-            channel => channel.name === WELCOME_CHANNEL_NAME && channel.isTextBased()
-        ) as TextChannel;
+            (channel): channel is TextChannel =>
+                channel instanceof TextChannel && channel.name === WELCOME_CHANNEL_NAME
+        );
 
         if (!welcomeChannel) {
-            console.error(`Welcome channel "${WELCOME_CHANNEL_NAME}" not found`);
+            yield* Effect.logError(`Welcome channel "${WELCOME_CHANNEL_NAME}" not found`);
             return;
         }
 
-        // Create welcome request
-        const welcomeData = await welcomeManager.createWelcomeRequest(
+        // Create welcome request (messageId is set after sending)
+        const welcomeData = yield* welcomeManager.createWelcomeRequest(
             member.user,
-            '', // messageId will be set after sending
+            '',
             welcomeChannel.id
         );
 
-        // Create and send welcome embed
         const embed = createWelcomeEmbed(welcomeData);
         const buttonRow = createWelcomeButtonRow(welcomeData);
 
-        const message = await welcomeChannel.send({
-            embeds: [embed],
-            components: [buttonRow],
-        });
+        const message = yield* discordCall('channel.send', () =>
+            welcomeChannel.send({ embeds: [embed], components: [buttonRow] })
+        );
 
-        // Update the welcome data with the message ID
-        console.log(`🔧 Updating welcome request ${welcomeData.id} with messageId: ${message.id}`);
-        const updateSuccess = await welcomeManager.updateWelcomeRequest(welcomeData.id, {
+        const updateSuccess = yield* welcomeManager.updateWelcomeRequest(welcomeData.id, {
             messageId: message.id,
         });
-        console.log(`🔧 MessageId update success: ${updateSuccess}`);
+        yield* Effect.logDebug(
+            `Welcome request ${welcomeData.id} updated with messageId ${message.id}: ${updateSuccess}`
+        );
 
-        console.log(`Welcome message sent for user ${member.user.username} (${member.id})`);
-    } catch (error) {
-        console.error('Error handling member join:', error);
-    }
-}
+        yield* Effect.logInfo(
+            `Welcome message sent for user ${member.user.username} (${member.id})`
+        );
+    }).pipe(Effect.catchCause(cause => Effect.logError('Error handling member join:', cause)));
+});

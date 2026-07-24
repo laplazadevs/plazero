@@ -1,19 +1,22 @@
-import { Guild } from 'discord.js';
+import type { Guild, Message, PartialMessage } from 'discord.js';
+import { Effect } from 'effect';
 import { randomUUID } from 'node:crypto';
 
 import { SERVER_BOOSTER_ROLE_NAME } from '../config/constants.js';
+import { discordCall } from '../discord/DiscordClient.js';
 
-// Helper function to get vote weight based on user roles
-export async function getVoteWeight(guild: Guild, userId: string): Promise<number> {
-    try {
-        const member = await guild.members.fetch(userId);
-        const isBooster = member.roles.cache.some(role => role.name === SERVER_BOOSTER_ROLE_NAME);
-        return isBooster ? 2 : 1;
-    } catch (error) {
-        console.error('Error fetching member for vote weight:', error);
-        return 1; // Default to 1 if error
-    }
-}
+// Vote weight based on user roles: boosters count double. Falls back to 1 when
+// the member cannot be fetched, matching the previous behavior.
+export const getVoteWeight = Effect.fn('getVoteWeight')(function* (guild: Guild, userId: string) {
+    return yield* discordCall('guild.members.fetch', () => guild.members.fetch(userId)).pipe(
+        Effect.map(member =>
+            member.roles.cache.some(role => role.name === SERVER_BOOSTER_ROLE_NAME) ? 2 : 1
+        ),
+        Effect.catch(error =>
+            Effect.logError('Error fetching member for vote weight:', error).pipe(Effect.as(1))
+        )
+    );
+});
 
 // Calculate weighted vote counts
 export function calculateVoteCounts(
@@ -32,14 +35,16 @@ export function generateVoteId(): string {
     return randomUUID();
 }
 
-// Check if a message is a vote-related message
-export function isVoteRelatedMessage(message: any, moderacionChannelName: string): boolean {
+// Check if a message is a vote-related message (completed votes included)
+export function isVoteRelatedMessage(
+    message: Message | PartialMessage,
+    moderacionChannelName: string
+): boolean {
     if (!message.guild) return false;
 
     const channel = message.channel;
-    if (channel.name !== moderacionChannelName) return false;
+    if (!('name' in channel) || channel.name !== moderacionChannelName) return false;
 
-    // Check if message has embeds that look like vote messages
     if (message.embeds && message.embeds.length > 0) {
         const embed = message.embeds[0];
         if (

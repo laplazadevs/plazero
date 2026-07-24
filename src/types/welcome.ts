@@ -1,8 +1,8 @@
-import { User } from 'discord.js';
+import type { PlazeroUser } from './user.js';
 
 export interface WelcomeData {
     id: string;
-    user: User;
+    user: PlazeroUser;
     joinTime: Date;
     linkedinUrl?: string;
     presentation?: string;
@@ -10,7 +10,7 @@ export interface WelcomeData {
     messageId: string;
     channelId: string;
     approved: boolean;
-    approvedBy?: User;
+    approvedBy?: PlazeroUser;
     approvedAt?: Date;
 }
 

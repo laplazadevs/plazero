@@ -1,52 +1,49 @@
-import { Client, PermissionFlagsBits, TextChannel } from 'discord.js';
+import { PermissionFlagsBits, TextChannel } from 'discord.js';
+import { Effect } from 'effect';
 
 import { VOTE_THRESHOLDS } from '../config/constants.js';
+import { discordCall, DiscordClient } from '../discord/DiscordClient.js';
 import { createCompletionEmbed } from '../services/vote-embed.js';
 import { VoteManager } from '../services/vote-manager.js';
 import { calculateVoteCounts } from '../utils/vote-utils.js';
 
-let discordClient: Client | null = null;
+// Completes a vote: applies (or not) the timeout, updates the embed, applies
+// the initiator penalty for rejected votes, and notifies the target user.
+export const completeVote = Effect.fn('completeVote')(function* (voteId: string) {
+    yield* Effect.logInfo(`Attempting to complete vote ${voteId}`);
 
-export function setDiscordClientForCompletion(client: Client): void {
-    discordClient = client;
-}
+    const voteManager = yield* VoteManager;
+    const client = yield* DiscordClient;
 
-export async function completeVote(voteId: string, voteManager: VoteManager): Promise<void> {
-    console.log(`Attempting to complete vote ${voteId}`);
-    const vote = await voteManager.getVote(voteId);
+    const vote = yield* voteManager.getVote(voteId);
     if (!vote) {
-        console.log(`Vote ${voteId} not found`);
+        yield* Effect.logInfo(`Vote ${voteId} not found`);
         return;
     }
     if (vote.completed) {
-        console.log(`Vote ${voteId} already completed`);
-        return;
-    }
-    if (!discordClient) {
-        console.log(`Discord client not available for vote ${voteId}`);
+        yield* Effect.logInfo(`Vote ${voteId} already completed`);
         return;
     }
 
     // Mark as completed first to prevent race conditions
-    await voteManager.completeVote(voteId);
+    yield* voteManager.completeVote(voteId);
 
     const { upVoteCount, downVoteCount, netVotes } = calculateVoteCounts(
         vote.upVotes,
         vote.downVotes
     );
 
-    const channel = discordClient.channels.cache.get(vote.channelId) as TextChannel;
-    if (!channel) return;
+    const channel = client.channels.cache.get(vote.channelId);
+    if (!channel || !(channel instanceof TextChannel)) return;
 
-    console.log(`Completing vote ${voteId}: ${netVotes} net votes`);
+    yield* Effect.logInfo(`Completing vote ${voteId}: ${netVotes} net votes`);
 
     let timeoutApplied = false;
     let timeoutDuration = 0;
     let timeoutLabel = '';
-    let error = false;
+    let errored = false;
 
     if (netVotes >= 5) {
-        // Find the appropriate timeout duration
         let selectedThreshold = VOTE_THRESHOLDS[0];
         for (const threshold of VOTE_THRESHOLDS) {
             if (netVotes >= threshold.votes) {
@@ -57,20 +54,28 @@ export async function completeVote(voteId: string, voteManager: VoteManager): Pr
         timeoutDuration = selectedThreshold.duration;
         timeoutLabel = selectedThreshold.label;
 
-        // Apply timeout
-        try {
-            const guild = channel.guild;
-            const targetMember = await guild.members.fetch(vote.targetUser.id);
-            await targetMember.timeout(timeoutDuration, `Votación comunitaria: ${vote.reason}`);
+        yield* Effect.gen(function* () {
+            const targetMember = yield* discordCall('guild.members.fetch', () =>
+                channel.guild.members.fetch(vote.targetUser.id)
+            );
+            yield* discordCall('member.timeout', () =>
+                targetMember.timeout(timeoutDuration, `Votación comunitaria: ${vote.reason}`)
+            );
             timeoutApplied = true;
-            console.log(`Applied ${timeoutLabel} timeout to ${vote.targetUser.username}`);
-        } catch (timeoutError) {
-            console.error('Error applying timeout:', timeoutError);
-            error = true;
-        }
+            yield* Effect.logInfo(`Applied ${timeoutLabel} timeout to ${vote.targetUser.username}`);
+        }).pipe(
+            Effect.catchCause(cause =>
+                Effect.logError('Error applying timeout:', cause).pipe(
+                    Effect.tap(() =>
+                        Effect.sync(() => {
+                            errored = true;
+                        })
+                    )
+                )
+            )
+        );
     }
 
-    // Create result embed
     const resultEmbed = createCompletionEmbed(
         vote,
         netVotes,
@@ -78,67 +83,74 @@ export async function completeVote(voteId: string, voteManager: VoteManager): Pr
         downVoteCount,
         timeoutApplied,
         timeoutLabel,
-        error
+        errored
     );
 
-    // Update the vote message
-    try {
-        const message = await channel.messages.fetch(vote.messageId);
-        await message.edit({ embeds: [resultEmbed] });
-    } catch (messageError) {
-        console.error('Error updating final vote message:', messageError);
-    }
+    yield* Effect.gen(function* () {
+        const message = yield* discordCall('channel.messages.fetch', () =>
+            channel.messages.fetch(vote.messageId)
+        );
+        yield* discordCall('message.edit', () => message.edit({ embeds: [resultEmbed] }));
+    }).pipe(
+        Effect.catchCause(cause => Effect.logError('Error updating final vote message:', cause))
+    );
 
-    // Apply initiator penalty if vote was rejected
+    // Initiator penalty when the vote was rejected
     if (!timeoutApplied && netVotes < 5) {
-        try {
-            const guild = channel.guild;
-            const initiatorMember = await guild.members.fetch(vote.initiator.id);
+        yield* Effect.gen(function* () {
+            const initiatorMember = yield* discordCall('guild.members.fetch', () =>
+                channel.guild.members.fetch(vote.initiator.id)
+            );
 
-            // Don't timeout admins
             if (!initiatorMember.permissions.has(PermissionFlagsBits.Administrator)) {
-                await initiatorMember.timeout(
-                    5 * 60 * 1000,
-                    'Votación rechazada - penalización por votación fallida'
+                yield* discordCall('member.timeout', () =>
+                    initiatorMember.timeout(
+                        5 * 60 * 1000,
+                        'Votación rechazada - penalización por votación fallida'
+                    )
                 );
-                console.log(
+                yield* Effect.logInfo(
                     `Applied 5-minute penalty timeout to initiator ${vote.initiator.username} for failed vote`
                 );
             }
-        } catch (initiatorError) {
-            console.error('Error applying initiator penalty timeout:', initiatorError);
-        }
+        }).pipe(
+            Effect.catchCause(cause =>
+                Effect.logError('Error applying initiator penalty timeout:', cause)
+            )
+        );
     }
 
-    // Notify target user
-    try {
+    // Notify the target user via DM. The user is fetched from Discord because
+    // the vote data was rebuilt from the database.
+    yield* Effect.gen(function* () {
+        const targetUser = yield* discordCall('users.fetch', () =>
+            client.users.fetch(vote.targetUser.id)
+        );
+
         if (timeoutApplied) {
             const timeoutMinutes = Math.floor(timeoutDuration / 60000);
             const timeoutHours = Math.floor(timeoutMinutes / 60);
-            let durationText = '';
+            const durationText =
+                timeoutHours > 0 ? `${timeoutHours} hora(s)` : `${timeoutMinutes} minuto(s)`;
 
-            if (timeoutHours > 0) {
-                durationText = `${timeoutHours} hora(s)`;
-            } else {
-                durationText = `${timeoutMinutes} minuto(s)`;
-            }
-
-            await vote.targetUser.send(
-                `⚠️ Se te ha aplicado un timeout de **${durationText}** en **${channel.guild.name}**.\n` +
-                    `**Razón:** ${vote.reason}\n` +
-                    `**Votos:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)`
+            yield* discordCall('user.send', () =>
+                targetUser.send(
+                    `⚠️ Se te ha aplicado un timeout de **${durationText}** en **${channel.guild.name}**.\n` +
+                        `**Razón:** ${vote.reason}\n` +
+                        `**Votos:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)`
+                )
             );
         } else {
-            await vote.targetUser.send(
-                `✅ La votación de timeout en tu contra ha sido rechazada en **${channel.guild.name}**.\n` +
-                    `**Votos:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)`
+            yield* discordCall('user.send', () =>
+                targetUser.send(
+                    `✅ La votación de timeout en tu contra ha sido rechazada en **${channel.guild.name}**.\n` +
+                        `**Votos:** 👍 ${upVoteCount} | 👎 ${downVoteCount} (${netVotes} netos)`
+                )
             );
         }
-    } catch {
-        // User might have DMs disabled
-    }
+    }).pipe(Effect.ignore); // User might have DMs disabled
 
-    console.log(
+    yield* Effect.logInfo(
         `Vote ${voteId} completed. Result: ${timeoutApplied ? 'Timeout applied' : 'Rejected'}`
     );
-}
+});

@@ -7,8 +7,11 @@ import {
     PartialUser,
     User,
 } from 'discord.js';
+import { Effect } from 'effect';
 
 import { CORABASTOS_CANCEL_EMOJI, CORABASTOS_CONFIRM_EMOJI } from '../config/constants.js';
+import { discordCall } from '../discord/DiscordClient.js';
+import { corabastosErrorMessage, SessionNotFoundError } from '../domain/errors.js';
 import {
     createAgendaCancelledEmbed,
     createAgendaSuccessEmbed,
@@ -18,65 +21,48 @@ import {
 } from '../services/corabastos-embed.js';
 import { CorabastosManager } from '../services/corabastos-manager.js';
 
-export async function handleCorabastosButtonInteraction(
+const editReplyWithError = Effect.fn('editReplyWithError')(function* (
     interaction: ButtonInteraction,
-    corabastosManager: CorabastosManager
-): Promise<void> {
-    const customId = interaction.customId;
+    message: string
+) {
+    const embed = createErrorEmbed('Error', message);
+    yield* discordCall('interaction.editReply', () =>
+        interaction.editReply({ embeds: [embed] })
+    ).pipe(Effect.ignore);
+});
 
-    try {
-        if (customId.startsWith('corabastos_confirm_')) {
-            await handleAgendaConfirmation(interaction, corabastosManager);
-        } else if (customId.startsWith('corabastos_cancel_')) {
-            await handleAgendaCancellation(interaction, corabastosManager);
-        } else {
-            await interaction.reply({
-                content: '❌ Interacción no reconocida.',
-                ephemeral: true,
-            });
-        }
-    } catch (error) {
-        console.error('Error in corabastos button interaction:', error);
-
-        const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-        const embed = createErrorEmbed('Error', errorMessage);
-
-        if (interaction.replied || interaction.deferred) {
-            await interaction.editReply({ embeds: [embed] });
-        } else {
-            await interaction.reply({ embeds: [embed], ephemeral: true });
-        }
-    }
-}
-
-async function handleAgendaConfirmation(
-    interaction: ButtonInteraction,
-    corabastosManager: CorabastosManager
-): Promise<void> {
+const handleAgendaConfirmation = Effect.fn('handleAgendaConfirmation')(function* (
+    interaction: ButtonInteraction
+) {
+    const corabastosManager = yield* CorabastosManager;
     const agendaId = interaction.customId.replace('corabastos_confirm_', '');
 
-    await interaction.deferReply({ ephemeral: true });
+    yield* discordCall('interaction.deferReply', () => interaction.deferReply({ ephemeral: true }));
 
-    try {
+    yield* Effect.gen(function* () {
         // Confirm the agenda item
-        await corabastosManager.confirmAgendaItem(agendaId, interaction.message.id);
+        yield* corabastosManager.confirmAgendaItem(agendaId, interaction.message.id);
 
-        // Get current session for success message
-        const session = await corabastosManager.getCurrentWeekSession();
+        // Get current session for the success message
+        const session = yield* corabastosManager.getCurrentWeekSession();
         if (!session) {
-            throw new Error('No se encontró la sesión actual.');
+            return yield* Effect.fail(SessionNotFoundError.make({}));
         }
 
-        // We need to extract the agenda details from the original embed
+        // Extract the agenda details from the original embed
         const originalEmbed = interaction.message.embeds[0];
         const turnoField = originalEmbed.fields.find(field => field.name.includes('Turno'));
         const topicField = originalEmbed.fields.find(field => field.name.includes('Tema'));
 
         if (!turnoField || !topicField) {
-            throw new Error('No se pudieron extraer los detalles de la agenda.');
+            yield* editReplyWithError(
+                interaction,
+                'No se pudieron extraer los detalles de la agenda.'
+            );
+            return;
         }
 
-        const turno = parseInt(turnoField.value.split(' ')[0]);
+        const turno = Number.parseInt(turnoField.value.split(' ')[0], 10);
         const topic = topicField.value;
 
         const weekStart = dayjs(session.weekStart).format('MMM DD');
@@ -85,92 +71,228 @@ async function handleAgendaConfirmation(
 
         const successEmbed = createAgendaSuccessEmbed(interaction.user, turno, topic, sessionWeek);
 
-        await interaction.editReply({ embeds: [successEmbed] });
+        yield* discordCall('interaction.editReply', () =>
+            interaction.editReply({ embeds: [successEmbed] })
+        );
 
-        // Try to update the original message to remove buttons, but handle if it no longer exists
-        try {
+        // Try to update the original message to remove buttons
+        yield* Effect.gen(function* () {
             const updatedEmbed = new EmbedBuilder(originalEmbed.data).setColor(0x00ff00).setFooter({
                 text: '✅ Tema confirmado y agregado a la agenda.',
             });
 
-            await interaction.message.edit({
-                embeds: [updatedEmbed],
-                components: [],
-            });
-        } catch (messageError) {
-            // If the original message is no longer available, log the error but don't fail the operation
-            console.warn(
-                'Could not update original confirmation message (may have been deleted):',
-                messageError
+            yield* discordCall('message.edit', () =>
+                interaction.message.edit({ embeds: [updatedEmbed], components: [] })
             );
-            // The agenda item was still successfully confirmed in the database
-        }
-    } catch (error) {
-        console.error('Error confirming agenda item:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Error al confirmar el tema';
-        const embed = createErrorEmbed('Error', errorMessage);
-        await interaction.editReply({ embeds: [embed] });
-    }
-}
+        }).pipe(
+            Effect.catchCause(cause =>
+                Effect.logWarning(
+                    'Could not update original confirmation message (may have been deleted):',
+                    cause
+                )
+            )
+        );
+    }).pipe(
+        Effect.catchTag('SessionNotFoundError', error =>
+            editReplyWithError(interaction, corabastosErrorMessage(error))
+        ),
+        Effect.catchCause(cause =>
+            Effect.gen(function* () {
+                yield* Effect.logError('Error confirming agenda item:', cause);
+                yield* editReplyWithError(interaction, 'Error al confirmar el tema');
+            })
+        )
+    );
+});
 
-async function handleAgendaCancellation(
-    interaction: ButtonInteraction,
-    corabastosManager: CorabastosManager
-): Promise<void> {
+const handleAgendaCancellation = Effect.fn('handleAgendaCancellation')(function* (
+    interaction: ButtonInteraction
+) {
+    const corabastosManager = yield* CorabastosManager;
     const agendaId = interaction.customId.replace('corabastos_cancel_', '');
 
-    await interaction.deferReply({ ephemeral: true });
+    yield* discordCall('interaction.deferReply', () => interaction.deferReply({ ephemeral: true }));
 
-    try {
-        // Cancel the agenda item
-        await corabastosManager.cancelAgendaItem(agendaId);
+    yield* Effect.gen(function* () {
+        yield* corabastosManager.cancelAgendaItem(agendaId);
 
         const cancelledEmbed = createAgendaCancelledEmbed();
-        await interaction.editReply({ embeds: [cancelledEmbed] });
+        yield* discordCall('interaction.editReply', () =>
+            interaction.editReply({ embeds: [cancelledEmbed] })
+        );
 
-        // Try to update the original message to remove buttons, but handle if it no longer exists
-        try {
+        // Try to update the original message to remove buttons
+        yield* Effect.gen(function* () {
             const originalEmbed = interaction.message.embeds[0];
             const updatedEmbed = new EmbedBuilder(originalEmbed.data).setColor(0xff0000).setFooter({
                 text: '❌ Tema cancelado.',
             });
 
-            await interaction.message.edit({
-                embeds: [updatedEmbed],
-                components: [],
-            });
-        } catch (messageError) {
-            // If the original message is no longer available, log the error but don't fail the operation
-            console.warn(
-                'Could not update original cancellation message (may have been deleted):',
-                messageError
+            yield* discordCall('message.edit', () =>
+                interaction.message.edit({ embeds: [updatedEmbed], components: [] })
             );
-            // The agenda item was still successfully cancelled in the database
-        }
-    } catch (error) {
-        console.error('Error cancelling agenda item:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Error al cancelar el tema';
-        const embed = createErrorEmbed('Error', errorMessage);
-        await interaction.editReply({ embeds: [embed] });
+        }).pipe(
+            Effect.catchCause(cause =>
+                Effect.logWarning(
+                    'Could not update original cancellation message (may have been deleted):',
+                    cause
+                )
+            )
+        );
+    }).pipe(
+        Effect.catchCause(cause =>
+            Effect.gen(function* () {
+                yield* Effect.logError('Error cancelling agenda item:', cause);
+                yield* editReplyWithError(interaction, 'Error al cancelar el tema');
+            })
+        )
+    );
+});
+
+export const handleCorabastosButtonInteraction = Effect.fn('handleCorabastosButtonInteraction')(
+    function* (interaction: ButtonInteraction) {
+        const customId = interaction.customId;
+
+        yield* Effect.gen(function* () {
+            if (customId.startsWith('corabastos_confirm_')) {
+                yield* handleAgendaConfirmation(interaction);
+            } else if (customId.startsWith('corabastos_cancel_')) {
+                yield* handleAgendaCancellation(interaction);
+            } else {
+                yield* discordCall('interaction.reply', () =>
+                    interaction.reply({
+                        content: '❌ Interacción no reconocida.',
+                        ephemeral: true,
+                    })
+                );
+            }
+        }).pipe(
+            Effect.catchCause(cause =>
+                Effect.gen(function* () {
+                    yield* Effect.logError('Error in corabastos button interaction:', cause);
+
+                    const embed = createErrorEmbed('Error', 'Error desconocido');
+                    if (interaction.replied || interaction.deferred) {
+                        yield* discordCall('interaction.editReply', () =>
+                            interaction.editReply({ embeds: [embed] })
+                        ).pipe(Effect.ignore);
+                    } else {
+                        yield* discordCall('interaction.reply', () =>
+                            interaction.reply({ embeds: [embed], ephemeral: true })
+                        ).pipe(Effect.ignore);
+                    }
+                })
+            )
+        );
     }
-}
+);
 
-export async function handleCorabastosReactionAdd(
+const handleEmergencyConfirmation = Effect.fn('handleEmergencyConfirmation')(function* (
     reaction: MessageReaction | PartialMessageReaction,
-    user: User | PartialUser,
-    corabastosManager: CorabastosManager
-): Promise<void> {
-    // Ignore bot reactions
-    if (user.bot) return;
+    user: User,
+    requestId: string
+) {
+    const corabastosManager = yield* CorabastosManager;
 
-    try {
+    yield* Effect.gen(function* () {
+        const wasAdded = yield* corabastosManager.addEmergencyConfirmation(requestId, user);
+
+        if (!wasAdded) {
+            // User already confirmed, silently ignore
+            return;
+        }
+
+        // Check if we have enough confirmations
+        const approvalStatus = yield* corabastosManager.checkEmergencyRequestApproval(requestId);
+
+        if (!approvalStatus.isApproved) {
+            return;
+        }
+
+        // Approve the emergency request
+        yield* corabastosManager.approveEmergencyRequest(requestId);
+
+        const emergencyRequest = yield* corabastosManager.getEmergencyRequest(requestId);
+        if (!emergencyRequest) return;
+
+        // Create emergency session
+        yield* corabastosManager.createEmergencySession(
+            emergencyRequest,
+            emergencyRequest.requestedBy
+        );
+
+        const approvalEmbed = createEmergencyApprovedEmbed(
+            emergencyRequest.requestedBy,
+            emergencyRequest.reason,
+            emergencyRequest.paciente,
+            approvalStatus.confirmationsReceived
+        );
+
+        // Announce in the general channel
+        const guild = reaction.message.guild;
+        if (guild) {
+            const generalChannel = yield* corabastosManager.findGeneralChannel(guild);
+            if (generalChannel) {
+                yield* discordCall('channel.send', () =>
+                    generalChannel.send({ content: '@everyone', embeds: [approvalEmbed] })
+                );
+            }
+        }
+
+        // Update the original message
+        yield* discordCall('message.edit', () =>
+            reaction.message.edit({ embeds: [approvalEmbed], components: [] })
+        );
+    }).pipe(
+        Effect.catchCause(cause => Effect.logError('Error handling emergency confirmation:', cause))
+    );
+});
+
+const handleEmergencyRejection = Effect.fn('handleEmergencyRejection')(function* (
+    reaction: MessageReaction | PartialMessageReaction,
+    user: User,
+    requestId: string
+) {
+    const corabastosManager = yield* CorabastosManager;
+
+    yield* Effect.gen(function* () {
+        // Only admins/moderators can reject
+        const member = reaction.message.guild?.members.cache.get(user.id);
+        if (!member?.permissions.has(['Administrator', 'ModerateMembers'])) {
+            return;
+        }
+
+        yield* corabastosManager.rejectEmergencyRequest(requestId);
+
+        const emergencyRequest = yield* corabastosManager.getEmergencyRequest(requestId);
+        if (!emergencyRequest) return;
+
+        const rejectionEmbed = createEmergencyRejectedEmbed(emergencyRequest.reason);
+
+        yield* discordCall('message.edit', () =>
+            reaction.message.edit({ embeds: [rejectionEmbed], components: [] })
+        );
+    }).pipe(
+        Effect.catchCause(cause => Effect.logError('Error handling emergency rejection:', cause))
+    );
+});
+
+export const handleCorabastosReactionAdd = Effect.fn('handleCorabastosReactionAdd')(function* (
+    partialReaction: MessageReaction | PartialMessageReaction,
+    partialUser: User | PartialUser
+) {
+    if (partialUser.bot) return;
+
+    const corabastosManager = yield* CorabastosManager;
+
+    yield* Effect.gen(function* () {
         // Fetch partial data if needed
-        if (reaction.partial) {
-            await reaction.fetch();
-        }
-        if (user.partial) {
-            await user.fetch();
-        }
+        const reaction = partialReaction.partial
+            ? yield* discordCall('reaction.fetch', () => partialReaction.fetch())
+            : partialReaction;
+        const user = partialUser.partial
+            ? yield* discordCall('user.fetch', () => partialUser.fetch())
+            : partialUser;
 
         const message = reaction.message;
         const emoji = reaction.emoji.name;
@@ -184,139 +306,34 @@ export async function handleCorabastosReactionAdd(
         }
 
         // Only handle confirm/cancel emojis
-        if (![CORABASTOS_CONFIRM_EMOJI, CORABASTOS_CANCEL_EMOJI].includes(emoji || '')) {
+        if (![CORABASTOS_CONFIRM_EMOJI, CORABASTOS_CANCEL_EMOJI].includes(emoji ?? '')) {
             return;
         }
 
-        // Extract request ID from the message
-        const pendingRequests = await corabastosManager.getPendingEmergencyRequests();
-
+        // Find the pending request tied to this message
+        const pendingRequests = yield* corabastosManager.getPendingEmergencyRequests();
         const emergencyRequest = pendingRequests.find(
             req => req.confirmationMessageId === message.id
         );
 
         if (!emergencyRequest) {
-            console.log('Emergency request not found for reaction');
+            yield* Effect.logDebug('Emergency request not found for reaction');
             return;
         }
 
         if (emoji === CORABASTOS_CONFIRM_EMOJI) {
-            await handleEmergencyConfirmation(
-                reaction,
-                user as User,
-                corabastosManager,
-                emergencyRequest.id
-            );
+            yield* handleEmergencyConfirmation(reaction, user, emergencyRequest.id);
         } else if (emoji === CORABASTOS_CANCEL_EMOJI) {
-            await handleEmergencyRejection(
-                reaction,
-                user as User,
-                corabastosManager,
-                emergencyRequest.id
-            );
+            yield* handleEmergencyRejection(reaction, user, emergencyRequest.id);
         }
-    } catch (error) {
-        console.error('Error handling corabastos reaction:', error);
+    }).pipe(
+        Effect.catchCause(cause => Effect.logError('Error handling corabastos reaction:', cause))
+    );
+});
+
+export const handleCorabastosReactionRemove = Effect.fn('handleCorabastosReactionRemove')(
+    function* (_reaction: MessageReaction | PartialMessageReaction, _user: User | PartialUser) {
+        // Reaction removals are not handled; emergency requests expire on their own.
+        yield* Effect.void;
     }
-}
-
-async function handleEmergencyConfirmation(
-    reaction: MessageReaction | PartialMessageReaction,
-    user: User,
-    corabastosManager: CorabastosManager,
-    requestId: string
-): Promise<void> {
-    try {
-        const wasAdded = await corabastosManager.addEmergencyConfirmation(requestId, user);
-
-        if (!wasAdded) {
-            // User already confirmed, silently ignore
-            return;
-        }
-
-        // Check if we have enough confirmations
-        const approvalStatus = await corabastosManager.checkEmergencyRequestApproval(requestId);
-
-        if (approvalStatus.isApproved) {
-            // Approve the emergency request
-            await corabastosManager.approveEmergencyRequest(requestId);
-
-            // Get the updated request
-            const emergencyRequest = await corabastosManager.getEmergencyRequest(requestId);
-            if (!emergencyRequest) return;
-
-            // Create emergency session
-            await corabastosManager.createEmergencySession(
-                emergencyRequest,
-                emergencyRequest.requestedBy
-            );
-
-            // Send approval message
-            const approvalEmbed = createEmergencyApprovedEmbed(
-                emergencyRequest.requestedBy,
-                emergencyRequest.reason,
-                emergencyRequest.paciente,
-                approvalStatus.confirmationsReceived
-            );
-
-            // Find general channel to send @everyone announcement
-            const guild = reaction.message.guild;
-            if (guild) {
-                const generalChannel = await corabastosManager.findGeneralChannel(guild);
-                if (generalChannel) {
-                    await generalChannel.send({
-                        content: '@everyone',
-                        embeds: [approvalEmbed],
-                    });
-                }
-            }
-
-            // Update the original message
-            await reaction.message.edit({
-                embeds: [approvalEmbed],
-                components: [],
-            });
-        }
-    } catch (error) {
-        console.error('Error handling emergency confirmation:', error);
-    }
-}
-
-async function handleEmergencyRejection(
-    reaction: MessageReaction | PartialMessageReaction,
-    user: User,
-    corabastosManager: CorabastosManager,
-    requestId: string
-): Promise<void> {
-    try {
-        // For simplicity, we'll only reject if an admin/moderator cancels
-        const member = reaction.message.guild?.members.cache.get(user.id);
-        if (!member?.permissions.has(['Administrator', 'ModerateMembers'])) {
-            return; // Only admins can reject
-        }
-
-        await corabastosManager.rejectEmergencyRequest(requestId);
-
-        const emergencyRequest = await corabastosManager.getEmergencyRequest(requestId);
-        if (!emergencyRequest) return;
-
-        const rejectionEmbed = createEmergencyRejectedEmbed(emergencyRequest.reason);
-
-        await reaction.message.edit({
-            embeds: [rejectionEmbed],
-            components: [],
-        });
-    } catch (error) {
-        console.error('Error handling emergency rejection:', error);
-    }
-}
-
-export async function handleCorabastosReactionRemove(
-    _reaction: MessageReaction | PartialMessageReaction,
-    _user: User | PartialUser,
-    _corabastosManager: CorabastosManager
-): Promise<void> {
-    // For now, we won't handle reaction removals as it would complicate the confirmation logic
-    // The emergency requests have an expiry time, so they'll be cleaned up automatically
-    return;
-}
+);

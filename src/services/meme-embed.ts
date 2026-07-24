@@ -110,7 +110,18 @@ export function createYearlyWinnersEmbed(
     return embed;
 }
 
-export function createMemeStatsEmbed(stats: any): EmbedBuilder {
+export interface MemeStatsView {
+    readonly totalMemes: number;
+    readonly totalBones: number;
+    readonly weeklyWinners: number;
+    readonly yearlyWinners: number;
+    readonly topContributors: ReadonlyArray<{
+        readonly user: { readonly username: string };
+        readonly count: number;
+    }>;
+}
+
+export function createMemeStatsEmbed(stats: MemeStatsView): EmbedBuilder {
     const embed = new EmbedBuilder()
         .setTitle('📊 Estadísticas de Memes')
         .setDescription(
@@ -124,7 +135,7 @@ export function createMemeStatsEmbed(stats: any): EmbedBuilder {
                     stats.topContributors.length > 0
                         ? stats.topContributors
                               .map(
-                                  (contributor: any, index: number) =>
+                                  (contributor, index) =>
                                       `${index + 1}. ${
                                           contributor.user.username || 'Usuario desconocido'
                                       }: ${contributor.count} posts`

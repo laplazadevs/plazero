@@ -1,9 +1,17 @@
-import { Message, User } from 'discord.js';
+import type { PlazeroUser } from './user.js';
+
+// Reference to a Discord message. Live discord.js `Message` objects satisfy
+// this shape; messages rebuilt from the database only carry the id.
+export interface MemeMessageRef {
+    readonly id: string;
+    readonly url?: string;
+    readonly createdAt?: Date;
+}
 
 export interface MemeData {
     id: string;
-    message: Message;
-    author: User;
+    message: MemeMessageRef;
+    author: PlazeroUser;
     reactionCount: number;
     contestType: 'meme' | 'bone';
     weekStart: Date;
@@ -21,7 +29,7 @@ export interface MemeContest {
     winners: MemeData[];
     channelId: string;
     messageId?: string;
-    createdBy: User;
+    createdBy: PlazeroUser;
     createdAt: Date;
 }
 
@@ -30,5 +38,5 @@ export interface MemeStats {
     totalBones: number;
     weeklyWinners: number;
     yearlyWinners: number;
-    topContributors: { user: User; count: number }[];
+    topContributors: { user: PlazeroUser; count: number }[];
 }

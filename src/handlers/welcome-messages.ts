@@ -1,8 +1,15 @@
 import { Message, TextChannel } from 'discord.js';
+import { Effect } from 'effect';
 
 import { WELCOME_CHANNEL_NAME, WELCOME_ROLE_NAME } from '../config/constants.js';
-import { createWelcomeButtonRow, createWelcomeEmbed } from '../services/welcome-embed.js';
+import { discordCall } from '../discord/DiscordClient.js';
+import {
+    createWelcomeApprovalEmbed,
+    createWelcomeButtonRow,
+    createWelcomeEmbed,
+} from '../services/welcome-embed.js';
 import { WelcomeManager } from '../services/welcome-manager.js';
+import { minimalPlazeroUser } from '../types/user.js';
 
 interface ParsedWelcomeInfo {
     linkedinUrl?: string;
@@ -98,7 +105,6 @@ function parseWelcomeMessage(messageContent: string): ParsedWelcomeInfo {
             }
         } else {
             // For unstructured messages, try to extract the most relevant part
-            // Look for sentences that contain introduction keywords
             const sentences = messageContent.split(/[.!?]+/).filter(s => s.trim().length > 0);
             const relevantSentences = sentences.filter(sentence => {
                 const lowerSentence = sentence.toLowerCase();
@@ -137,7 +143,6 @@ function parseWelcomeMessage(messageContent: string): ParsedWelcomeInfo {
         content.includes('me invitó') ||
         content.includes('invitado por') ||
         content.includes('quien te invitó') ||
-        content.includes('me trajo') ||
         content.includes('me recomendó') ||
         content.includes('conocí por') ||
         content.includes('vine por') ||
@@ -209,22 +214,22 @@ function parseWelcomeMessage(messageContent: string): ParsedWelcomeInfo {
     return result;
 }
 
-export async function handleWelcomeMessage(
-    message: Message,
-    welcomeManager: WelcomeManager
-): Promise<void> {
+export const handleWelcomeMessage = Effect.fn('handleWelcomeMessage')(function* (message: Message) {
     // Only process messages in the welcome channel
     if (
-        !message.channel.isTextBased() ||
-        (message.channel as TextChannel).name !== WELCOME_CHANNEL_NAME ||
+        !(message.channel instanceof TextChannel) ||
+        message.channel.name !== WELCOME_CHANNEL_NAME ||
         message.author.bot
     ) {
         return;
     }
+    const channel = message.channel;
 
-    try {
+    const welcomeManager = yield* WelcomeManager;
+
+    yield* Effect.gen(function* () {
         // Find the welcome request for this user
-        const welcomeRequests = await welcomeManager.getAllPendingRequests();
+        const welcomeRequests = yield* welcomeManager.getAllPendingRequests();
         const userWelcomeRequest = welcomeRequests.find(
             request => request.user.id === message.author.id && !request.approved
         );
@@ -237,28 +242,25 @@ export async function handleWelcomeMessage(
         const parsedInfo = parseWelcomeMessage(message.content);
         let updated = false;
 
-        // Update LinkedIn URL if found and either not set or different from current
         if (parsedInfo.linkedinUrl && parsedInfo.linkedinUrl !== userWelcomeRequest.linkedinUrl) {
-            await welcomeManager.updateWelcomeRequest(userWelcomeRequest.id, {
+            yield* welcomeManager.updateWelcomeRequest(userWelcomeRequest.id, {
                 linkedinUrl: parsedInfo.linkedinUrl,
             });
             updated = true;
         }
 
-        // Update presentation if found and either not set or different from current
         if (
             parsedInfo.presentation &&
             parsedInfo.presentation !== userWelcomeRequest.presentation
         ) {
-            await welcomeManager.updateWelcomeRequest(userWelcomeRequest.id, {
+            yield* welcomeManager.updateWelcomeRequest(userWelcomeRequest.id, {
                 presentation: parsedInfo.presentation,
             });
             updated = true;
         }
 
-        // Update invitation info if found and either not set or different from current
         if (parsedInfo.invitedBy && parsedInfo.invitedBy !== userWelcomeRequest.invitedBy) {
-            await welcomeManager.updateWelcomeRequest(userWelcomeRequest.id, {
+            yield* welcomeManager.updateWelcomeRequest(userWelcomeRequest.id, {
                 invitedBy: parsedInfo.invitedBy,
             });
             updated = true;
@@ -266,154 +268,118 @@ export async function handleWelcomeMessage(
 
         // Get the latest request data (either from updates or original)
         const currentRequest = updated
-            ? await welcomeManager.getWelcomeRequest(userWelcomeRequest.id)
+            ? yield* welcomeManager.getWelcomeRequest(userWelcomeRequest.id)
             : userWelcomeRequest;
 
         if (!currentRequest) {
-            console.warn(`🔧 Could not retrieve current welcome request:`, userWelcomeRequest.id);
+            yield* Effect.logWarning(
+                `Could not retrieve current welcome request: ${userWelcomeRequest.id}`
+            );
             return;
         }
 
-        // Check if all required information is now complete and request is not already approved
+        // Check if all required information is now complete
         const hasAllInfo =
             currentRequest.linkedinUrl && currentRequest.presentation && currentRequest.invitedBy;
 
         if (hasAllInfo && !currentRequest.approved) {
-            console.log(
-                `🎉 All welcome information complete for user ${currentRequest.user.username}, auto-approving...`
+            yield* Effect.logInfo(
+                `All welcome information complete for user ${currentRequest.user.username}, auto-approving...`
             );
 
-            // Create a bot user object for approval
-            const botUser = {
-                id: 'plazero#2570',
-                username: 'plazero',
-                discriminator: '2570',
-            } as any;
+            // The bot approves on its own behalf
+            const botUser = minimalPlazeroUser('plazero#2570', 'plazero');
 
-            // Auto-approve the request
-            const approvalSuccess = await welcomeManager.approveWelcomeRequest(
+            const approvalSuccess = yield* welcomeManager.approveWelcomeRequest(
                 currentRequest.id,
                 botUser
             );
 
-            if (approvalSuccess) {
-                console.log(`✅ Auto-approved welcome request for ${currentRequest.user.username}`);
-
-                // Assign the welcome role
-                const guild = message.guild;
-                if (guild) {
-                    try {
-                        const targetMember = await guild.members.fetch(currentRequest.user.id);
-                        const welcomeRole = guild.roles.cache.find(
-                            role => role.name === WELCOME_ROLE_NAME
-                        );
-
-                        if (targetMember && welcomeRole) {
-                            await targetMember.roles.add(welcomeRole);
-                            console.log(
-                                `✅ Assigned "${WELCOME_ROLE_NAME}" role to ${currentRequest.user.username}`
-                            );
-                        } else {
-                            console.warn(`⚠️ Could not assign role: member or role not found`);
-                        }
-                    } catch (roleError) {
-                        console.error('Error assigning role during auto-approval:', roleError);
-                    }
-                }
-
-                // Get the updated request with approval data and update the embed
-                const finalRequest = await welcomeManager.getWelcomeRequest(currentRequest.id);
-                if (finalRequest) {
-                    const { createWelcomeApprovalEmbed } = await import(
-                        '../services/welcome-embed.js'
-                    );
-                    const approvalEmbed = createWelcomeApprovalEmbed(finalRequest);
-
-                    const channel = message.channel as TextChannel;
-                    try {
-                        const originalMessage = await channel.messages.fetch(
-                            finalRequest.messageId
-                        );
-                        if (originalMessage) {
-                            await originalMessage.edit({
-                                embeds: [approvalEmbed],
-                                components: [], // Remove the button since it's approved
-                            });
-                            console.log(`✅ Updated welcome message with auto-approval`);
-                        }
-                    } catch (error) {
-                        console.error(`Error updating message after auto-approval:`, error);
-                    }
-                }
-            } else {
-                console.error(
-                    `❌ Failed to auto-approve welcome request for ${currentRequest.user.username}`
+            if (!approvalSuccess) {
+                yield* Effect.logError(
+                    `Failed to auto-approve welcome request for ${currentRequest.user.username}`
                 );
+                return;
             }
-        }
 
-        // If information was updated but not auto-approved, refresh the embed
-        else if (updated) {
-            console.log(
-                `🔧 Information was updated, refreshing embed for request:`,
-                userWelcomeRequest.id
+            yield* Effect.logInfo(
+                `Auto-approved welcome request for ${currentRequest.user.username}`
             );
 
-            if (currentRequest) {
-                console.log(`🔧 Retrieved updated request messageId:`, currentRequest.messageId);
-                console.log(`🔧 Retrieved updated request channelId:`, currentRequest.channelId);
-                console.log(`🔧 Message channel ID:`, message.channel.id);
-
-                const embed = createWelcomeEmbed(currentRequest);
-                const buttonRow = createWelcomeButtonRow(currentRequest);
-
-                // Find the original welcome message and update it
-                const channel = message.channel;
-                try {
-                    console.log(
-                        `🔧 Attempting to fetch message with ID:`,
-                        currentRequest.messageId
+            // Assign the welcome role
+            const guild = message.guild;
+            if (guild) {
+                yield* Effect.gen(function* () {
+                    const targetMember = yield* discordCall('guild.members.fetch', () =>
+                        guild.members.fetch(currentRequest.user.id)
                     );
-                    const originalMessage = await channel.messages.fetch(currentRequest.messageId);
-                    console.log(`🔧 Fetched message:`, originalMessage ? 'SUCCESS' : 'FAILED');
-                    console.log(
-                        `🔧 Message has edit function:`,
-                        typeof originalMessage?.edit === 'function'
+                    const welcomeRole = guild.roles.cache.find(
+                        role => role.name === WELCOME_ROLE_NAME
                     );
 
-                    if (originalMessage && typeof originalMessage.edit === 'function') {
-                        await originalMessage.edit({
-                            embeds: [embed],
-                            components: [buttonRow],
-                        });
-                        console.log(
-                            `🔧 Successfully updated welcome message:`,
-                            currentRequest.messageId
+                    if (targetMember && welcomeRole) {
+                        yield* discordCall('member.roles.add', () =>
+                            targetMember.roles.add(welcomeRole)
+                        );
+                        yield* Effect.logInfo(
+                            `Assigned "${WELCOME_ROLE_NAME}" role to ${currentRequest.user.username}`
                         );
                     } else {
-                        console.warn(
-                            `🔧 Original message not found or cannot be edited:`,
-                            currentRequest.messageId
-                        );
-                        console.warn(`🔧 Message object:`, originalMessage);
+                        yield* Effect.logWarning('Could not assign role: member or role not found');
                     }
-                } catch (error) {
-                    console.error(`🔧 Error updating welcome message:`, error);
-                    console.error(`🔧 Error details:`, {
-                        messageId: currentRequest.messageId,
-                        channelId: currentRequest.channelId,
-                        currentChannelId: message.channel.id,
-                        error: error instanceof Error ? error.message : String(error),
-                    });
-                }
-            } else {
-                console.warn(
-                    `🔧 Could not retrieve updated welcome request:`,
-                    userWelcomeRequest.id
+                }).pipe(
+                    Effect.catchCause(cause =>
+                        Effect.logError('Error assigning role during auto-approval:', cause)
+                    )
                 );
             }
+
+            // Update the embed with the approval data
+            const finalRequest = yield* welcomeManager.getWelcomeRequest(currentRequest.id);
+            if (finalRequest) {
+                const approvalEmbed = createWelcomeApprovalEmbed(finalRequest);
+
+                yield* Effect.gen(function* () {
+                    const originalMessage = yield* discordCall('channel.messages.fetch', () =>
+                        channel.messages.fetch(finalRequest.messageId)
+                    );
+                    yield* discordCall('message.edit', () =>
+                        originalMessage.edit({ embeds: [approvalEmbed], components: [] })
+                    );
+                    yield* Effect.logInfo('Updated welcome message with auto-approval');
+                }).pipe(
+                    Effect.catchCause(cause =>
+                        Effect.logError('Error updating message after auto-approval:', cause)
+                    )
+                );
+            }
+        } else if (updated) {
+            // Information was updated but not auto-approved: refresh the embed
+            yield* Effect.logDebug(
+                `Information was updated, refreshing embed for request: ${userWelcomeRequest.id}`
+            );
+
+            const embed = createWelcomeEmbed(currentRequest);
+            const buttonRow = createWelcomeButtonRow(currentRequest);
+
+            yield* Effect.gen(function* () {
+                const originalMessage = yield* discordCall('channel.messages.fetch', () =>
+                    channel.messages.fetch(currentRequest.messageId)
+                );
+                yield* discordCall('message.edit', () =>
+                    originalMessage.edit({ embeds: [embed], components: [buttonRow] })
+                );
+                yield* Effect.logDebug(
+                    `Successfully updated welcome message: ${currentRequest.messageId}`
+                );
+            }).pipe(
+                Effect.catchCause(cause =>
+                    Effect.logError(
+                        `Error updating welcome message ${currentRequest.messageId}:`,
+                        cause
+                    )
+                )
+            );
         }
-    } catch (error) {
-        console.error('Error handling welcome message:', error);
-    }
-}
+    }).pipe(Effect.catchCause(cause => Effect.logError('Error handling welcome message:', cause)));
+});

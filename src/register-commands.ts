@@ -1,25 +1,12 @@
 import { SlashCommandBuilder } from '@discordjs/builders';
 import { REST } from '@discordjs/rest';
+import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
 import { Routes } from 'discord-api-types/v9';
+import { Effect, Redacted } from 'effect';
 
-const token = process.env.DISCORD_BOT_TOKEN;
-const clientId = process.env.CLIENT_ID;
-const guildId = process.env.GUILD_ID;
-
-if (!token) {
-    console.error('Error: DISCORD_BOT_TOKEN not found in environment variables.');
-    process.exit(1);
-}
-
-if (!clientId) {
-    console.error('Error: CLIENT_ID not found in environment variables.');
-    process.exit(1);
-}
-
-if (!guildId) {
-    console.error('Error: GUILD_ID not found in environment variables.');
-    process.exit(1);
-}
+import { DotEnvConfigProviderLive } from './config/AppConfigProvider.js';
+import { discordBotToken, discordClientId, discordGuildId } from './config/env.js';
+import { discordCall } from './discord/DiscordClient.js';
 
 const commands = [
     new SlashCommandBuilder()
@@ -134,18 +121,21 @@ const commands = [
         ),
 ].map(command => command.toJSON());
 
-const rest = new REST({ version: '9' }).setToken(token);
+const program = Effect.gen(function* () {
+    const token = yield* discordBotToken;
+    const clientId = yield* discordClientId;
+    const guildId = yield* discordGuildId;
 
-(async () => {
-    try {
-        console.log('Started refreshing slash commands.');
+    const rest = new REST({ version: '9' }).setToken(Redacted.value(token));
 
-        await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
-            body: commands,
-        });
+    yield* Effect.logInfo('Started refreshing slash commands.');
 
-        console.log('Successfully reloaded slash commands.');
-    } catch (error) {
-        console.error(error);
-    }
-})();
+    yield* discordCall('rest.put', () =>
+        rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands })
+    ).pipe(
+        Effect.andThen(Effect.logInfo('Successfully reloaded slash commands.')),
+        Effect.catchCause(cause => Effect.logError(cause))
+    );
+});
+
+NodeRuntime.runMain(program.pipe(Effect.provide(DotEnvConfigProviderLive)));

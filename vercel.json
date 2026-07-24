@@ -1,0 +1,9 @@
+{
+    "$schema": "https://openapi.vercel.sh/vercel.json",
+    "buildCommand": "",
+    "installCommand": "npm install",
+    "rewrites": [
+        { "source": "/", "destination": "/api/health" },
+        { "source": "/health", "destination": "/api/health" }
+    ]
+}

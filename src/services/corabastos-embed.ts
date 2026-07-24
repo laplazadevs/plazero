@@ -1,8 +1,7 @@
+import type { PlazeroUser } from '../types/user.js';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone.js';
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, User } from 'discord.js';
-
-dayjs.extend(timezone);
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 
 import {
     CORABASTOS_CALENDAR_EMOJI,
@@ -18,9 +17,11 @@ import {
     getTurnoLabel,
 } from '../types/corabastos.js';
 
+dayjs.extend(timezone);
+
 // Agenda confirmation embed and buttons
 export function createAgendaConfirmationEmbed(
-    user: User,
+    user: PlazeroUser,
     turno: number,
     topic: string,
     description?: string
@@ -28,7 +29,9 @@ export function createAgendaConfirmationEmbed(
     const embed = new EmbedBuilder()
         .setTitle(`${CORABASTOS_CALENDAR_EMOJI} Confirmar Agenda - Corabastos`)
         .setDescription(
-            `**${user.displayName}**, ¿estás seguro de que quieres agregar este tema a la agenda del corabastos?`
+            `**${
+                user.displayName ?? user.username
+            }**, ¿estás seguro de que quieres agregar este tema a la agenda del corabastos?`
         )
         .addFields(
             {
@@ -68,7 +71,7 @@ export function createAgendaConfirmationButtons(agendaId: string): ActionRowBuil
 
 // Agenda success/error embeds
 export function createAgendaSuccessEmbed(
-    user: User,
+    user: PlazeroUser,
     turno: number,
     topic: string,
     sessionWeek: string
@@ -76,7 +79,9 @@ export function createAgendaSuccessEmbed(
     return new EmbedBuilder()
         .setTitle(`${CORABASTOS_CONFIRM_EMOJI} Tema Agregado a la Agenda`)
         .setDescription(
-            `**${user.displayName}**, tu tema ha sido agregado exitosamente a la agenda del corabastos.`
+            `**${
+                user.displayName ?? user.username
+            }**, tu tema ha sido agregado exitosamente a la agenda del corabastos.`
         )
         .addFields(
             { name: '📅 Semana', value: sessionWeek, inline: true },
@@ -145,7 +150,9 @@ export function createAgendaDisplayEmbed(
         const itemsText = items
             .map(item => {
                 const status = item.status === 'confirmed' ? '✅' : '⏳';
-                return `${status} **${item.user.displayName}**: ${item.topic}`;
+                return `${status} **${item.user.displayName ?? item.user.username}**: ${
+                    item.topic
+                }`;
             })
             .join('\n');
 
@@ -161,23 +168,27 @@ export function createAgendaDisplayEmbed(
 
 // Emergency request embeds
 export function createEmergencyRequestEmbed(
-    user: User,
+    user: PlazeroUser,
     reason: string,
-    paciente: User,
+    paciente: PlazeroUser,
     confirmationsNeeded: number = 10
 ): EmbedBuilder {
     const embed = new EmbedBuilder()
         .setTitle(`${CORABASTOS_EMERGENCY_EMOJI} Corabastos de Emergencia`)
         .setDescription(
-            `**${user.displayName}** está solicitando un corabastos de emergencia.\n\n` +
+            `**${
+                user.displayName ?? user.username
+            }** está solicitando un corabastos de emergencia.\n\n` +
                 `Se necesitan **${confirmationsNeeded} confirmaciones** de la comunidad para proceder.\n\n` +
-                `**⚠️ IMPORTANTE:** ${paciente.displayName} debe confirmar su participación para que la solicitud sea válida.`
+                `**⚠️ IMPORTANTE:** ${
+                    paciente.displayName ?? paciente.username
+                } debe confirmar su participación para que la solicitud sea válida.`
         )
         .addFields(
             { name: '🚨 Razón', value: reason, inline: false },
             {
                 name: '👤 Paciente',
-                value: `${paciente.displayName} (${paciente.username})`,
+                value: `${paciente.displayName ?? paciente.username} (${paciente.username})`,
                 inline: true,
             }
         )
@@ -191,22 +202,24 @@ export function createEmergencyRequestEmbed(
 }
 
 export function createEmergencyApprovedEmbed(
-    originalUser: User,
+    originalUser: PlazeroUser,
     reason: string,
-    paciente: User,
+    paciente: PlazeroUser,
     confirmationsReceived: number
 ): EmbedBuilder {
     return new EmbedBuilder()
         .setTitle(`${CORABASTOS_CONFIRM_EMOJI} Corabastos de Emergencia Aprobado`)
         .setDescription(
-            `El corabastos de emergencia solicitado por **${originalUser.displayName}** ha sido aprobado.\n\n` +
+            `El corabastos de emergencia solicitado por **${
+                originalUser.displayName ?? originalUser.username
+            }** ha sido aprobado.\n\n` +
                 `**@everyone** Se convoca un corabastos de emergencia. Únanse al canal de voz corabastos para discutir:`
         )
         .addFields(
             { name: '🚨 Tema', value: reason, inline: false },
             {
                 name: '👤 Liderado por',
-                value: `${paciente.displayName} (${paciente.username})`,
+                value: `${paciente.displayName ?? paciente.username} (${paciente.username})`,
                 inline: true,
             }
         )

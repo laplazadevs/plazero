@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import { ChatInputCommandInteraction, PermissionFlagsBits } from 'discord.js';
+import { Effect } from 'effect';
 
 import {
     CORABASTOS_CANCEL_EMOJI,
@@ -7,6 +8,8 @@ import {
     CORABASTOS_CONFIRMATION_TIMEOUT_MS,
     CORABASTOS_EMERGENCY_CONFIRMATIONS_NEEDED,
 } from '../config/constants.js';
+import { discordCall } from '../discord/DiscordClient.js';
+import { corabastosErrorMessage } from '../domain/errors.js';
 import {
     createAgendaConfirmationButtons,
     createAgendaConfirmationEmbed,
@@ -18,44 +21,28 @@ import {
 import { CorabastosManager } from '../services/corabastos-manager.js';
 import { isValidTurno } from '../types/corabastos.js';
 
-export async function handleCorabastosAgendaCommand(
+const replyWithErrorEmbed = Effect.fn('replyWithErrorEmbed')(function* (
     interaction: ChatInputCommandInteraction,
-    corabastosManager: CorabastosManager
-): Promise<void> {
-    const subcommand = interaction.options.getSubcommand();
-
-    try {
-        switch (subcommand) {
-            case 'agregar':
-                await handleAddAgendaItem(interaction, corabastosManager);
-                break;
-            case 'ver':
-                await handleViewAgenda(interaction, corabastosManager);
-                break;
-            default:
-                await interaction.reply({
-                    content: '❌ Subcomando no reconocido.',
-                    ephemeral: true,
-                });
-        }
-    } catch (error) {
-        console.error('Error in handleCorabastosAgendaCommand:', error);
-
-        const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-        const embed = createErrorEmbed('Error en Agenda', errorMessage);
-
-        if (interaction.replied || interaction.deferred) {
-            await interaction.editReply({ embeds: [embed] });
-        } else {
-            await interaction.reply({ embeds: [embed], ephemeral: true });
-        }
+    title: string,
+    description: string
+) {
+    const embed = createErrorEmbed(title, description);
+    if (interaction.replied || interaction.deferred) {
+        yield* discordCall('interaction.editReply', () =>
+            interaction.editReply({ embeds: [embed] })
+        );
+    } else {
+        yield* discordCall('interaction.reply', () =>
+            interaction.reply({ embeds: [embed], ephemeral: true })
+        );
     }
-}
+});
 
-async function handleAddAgendaItem(
-    interaction: ChatInputCommandInteraction,
-    corabastosManager: CorabastosManager
-): Promise<void> {
+const handleAddAgendaItem = Effect.fn('handleAddAgendaItem')(function* (
+    interaction: ChatInputCommandInteraction
+) {
+    const corabastosManager = yield* CorabastosManager;
+
     const turno = interaction.options.getInteger('turno', true);
     const topic = interaction.options.getString('tema', true);
     const description = interaction.options.getString('descripcion', false);
@@ -66,7 +53,9 @@ async function handleAddAgendaItem(
             'Turno Inválido',
             `El turno debe estar entre 0 (12:00 PM) y 8 (8:00 PM). Recibido: ${turno}`
         );
-        await interaction.reply({ embeds: [embed], ephemeral: true });
+        yield* discordCall('interaction.reply', () =>
+            interaction.reply({ embeds: [embed], ephemeral: true })
+        );
         return;
     }
 
@@ -76,143 +65,218 @@ async function handleAddAgendaItem(
             'Tema Muy Largo',
             'El tema no puede exceder 200 caracteres.'
         );
-        await interaction.reply({ embeds: [embed], ephemeral: true });
+        yield* discordCall('interaction.reply', () =>
+            interaction.reply({ embeds: [embed], ephemeral: true })
+        );
         return;
     }
 
-    try {
-        const { agendaItem } = await corabastosManager.addAgendaItem(
+    yield* Effect.gen(function* () {
+        const { agendaItem } = yield* corabastosManager.addAgendaItem(
             interaction.user,
             turno,
             topic,
-            description || undefined
+            description ?? undefined
         );
 
-        // Create confirmation embed and buttons
         const confirmationEmbed = createAgendaConfirmationEmbed(
             interaction.user,
             turno,
             topic,
-            description || undefined
+            description ?? undefined
         );
         const buttonRow = createAgendaConfirmationButtons(agendaItem.id);
 
-        await interaction.reply({
-            embeds: [confirmationEmbed],
-            components: [buttonRow],
-            ephemeral: true,
-        });
+        yield* discordCall('interaction.reply', () =>
+            interaction.reply({
+                embeds: [confirmationEmbed],
+                components: [buttonRow],
+                ephemeral: true,
+            })
+        );
 
-        // Set timeout to remove buttons if no response
-        setTimeout(async () => {
-            try {
-                await interaction.editReply({
-                    embeds: [confirmationEmbed],
-                    components: [], // Remove buttons
-                });
-            } catch (error) {
-                // Ignore timeout errors
-                console.log('Timeout error (expected):', error);
-            }
-        }, CORABASTOS_CONFIRMATION_TIMEOUT_MS);
-    } catch (error) {
-        const errorMessage =
-            error instanceof Error ? error.message : 'Error al agregar tema a la agenda';
-        const embed = createErrorEmbed('Error', errorMessage);
-        await interaction.reply({ embeds: [embed], ephemeral: true });
-    }
-}
+        // Remove the buttons if there is no response before the timeout
+        yield* discordCall('interaction.editReply', () =>
+            interaction.editReply({ embeds: [confirmationEmbed], components: [] })
+        ).pipe(
+            Effect.delay(CORABASTOS_CONFIRMATION_TIMEOUT_MS),
+            Effect.catchCause(cause => Effect.logDebug('Timeout error (expected):', cause)),
+            Effect.forkDetach
+        );
+    }).pipe(
+        Effect.catchTags({
+            InvalidTurnoError: error =>
+                replyWithErrorEmbed(interaction, 'Error', corabastosErrorMessage(error)),
+            DuplicateAgendaTopicError: error =>
+                replyWithErrorEmbed(interaction, 'Error', corabastosErrorMessage(error)),
+        }),
+        Effect.catchCause(cause =>
+            Effect.gen(function* () {
+                yield* Effect.logError('Error adding agenda item:', cause);
+                yield* replyWithErrorEmbed(
+                    interaction,
+                    'Error',
+                    'Error al agregar tema a la agenda'
+                ).pipe(Effect.ignore);
+            })
+        )
+    );
+});
 
-async function handleViewAgenda(
-    interaction: ChatInputCommandInteraction,
-    corabastosManager: CorabastosManager
-): Promise<void> {
-    await interaction.deferReply();
+const handleViewAgenda = Effect.fn('handleViewAgenda')(function* (
+    interaction: ChatInputCommandInteraction
+) {
+    const corabastosManager = yield* CorabastosManager;
 
-    try {
-        const session = await corabastosManager.getCurrentWeekSession();
-        const agendaItems = await corabastosManager.getCurrentWeekAgenda();
+    yield* discordCall('interaction.deferReply', () => interaction.deferReply());
+
+    yield* Effect.gen(function* () {
+        const session = yield* corabastosManager.getCurrentWeekSession();
+        const agendaItems = yield* corabastosManager.getCurrentWeekAgenda();
 
         if (!session) {
             const embed = createErrorEmbed(
                 'Sin Agenda',
                 'No hay una sesión de corabastos programada para esta semana.'
             );
-            await interaction.editReply({ embeds: [embed] });
+            yield* discordCall('interaction.editReply', () =>
+                interaction.editReply({ embeds: [embed] })
+            );
             return;
         }
 
         const embed = createAgendaDisplayEmbed(session, agendaItems);
-        await interaction.editReply({ embeds: [embed] });
-    } catch (error) {
-        console.error('Error viewing agenda:', error);
-        const embed = createErrorEmbed('Error', 'No se pudo obtener la agenda.');
-        await interaction.editReply({ embeds: [embed] });
-    }
-}
-
-export async function handleCorabastosEmergencyCommand(
-    interaction: ChatInputCommandInteraction,
-    corabastosManager: CorabastosManager
-): Promise<void> {
-    const reason = interaction.options.getString('razon', true);
-    const paciente = interaction.options.getUser('paciente', true);
-
-    // Validate reason length
-    if (reason.length > 300) {
-        const embed = createErrorEmbed(
-            'Razón Muy Larga',
-            'La razón no puede exceder 300 caracteres.'
+        yield* discordCall('interaction.editReply', () =>
+            interaction.editReply({ embeds: [embed] })
         );
-        await interaction.reply({ embeds: [embed], ephemeral: true });
-        return;
-    }
+    }).pipe(
+        Effect.catchCause(cause =>
+            Effect.gen(function* () {
+                yield* Effect.logError('Error viewing agenda:', cause);
+                const embed = createErrorEmbed('Error', 'No se pudo obtener la agenda.');
+                yield* discordCall('interaction.editReply', () =>
+                    interaction.editReply({ embeds: [embed] })
+                ).pipe(Effect.ignore);
+            })
+        )
+    );
+});
 
-    await interaction.deferReply();
+export const handleCorabastosAgendaCommand = Effect.fn('handleCorabastosAgendaCommand')(function* (
+    interaction: ChatInputCommandInteraction
+) {
+    const subcommand = interaction.options.getSubcommand();
 
-    try {
-        const emergencyRequest = await corabastosManager.createEmergencyRequest(
-            interaction.user,
-            reason,
-            paciente
+    yield* Effect.gen(function* () {
+        switch (subcommand) {
+            case 'agregar':
+                yield* handleAddAgendaItem(interaction);
+                break;
+            case 'ver':
+                yield* handleViewAgenda(interaction);
+                break;
+            default:
+                yield* discordCall('interaction.reply', () =>
+                    interaction.reply({
+                        content: '❌ Subcomando no reconocido.',
+                        ephemeral: true,
+                    })
+                );
+        }
+    }).pipe(
+        Effect.catchCause(cause =>
+            Effect.gen(function* () {
+                yield* Effect.logError('Error in handleCorabastosAgendaCommand:', cause);
+                yield* replyWithErrorEmbed(
+                    interaction,
+                    'Error en Agenda',
+                    'Error desconocido'
+                ).pipe(Effect.ignore);
+            })
+        )
+    );
+});
+
+export const handleCorabastosEmergencyCommand = Effect.fn('handleCorabastosEmergencyCommand')(
+    function* (interaction: ChatInputCommandInteraction) {
+        const corabastosManager = yield* CorabastosManager;
+
+        const reason = interaction.options.getString('razon', true);
+        const paciente = interaction.options.getUser('paciente', true);
+
+        // Validate reason length
+        if (reason.length > 300) {
+            const embed = createErrorEmbed(
+                'Razón Muy Larga',
+                'La razón no puede exceder 300 caracteres.'
+            );
+            yield* discordCall('interaction.reply', () =>
+                interaction.reply({ embeds: [embed], ephemeral: true })
+            );
+            return;
+        }
+
+        yield* discordCall('interaction.deferReply', () => interaction.deferReply());
+
+        yield* Effect.gen(function* () {
+            const emergencyRequest = yield* corabastosManager.createEmergencyRequest(
+                interaction.user,
+                reason,
+                paciente
+            );
+
+            const embed = createEmergencyRequestEmbed(
+                interaction.user,
+                reason,
+                paciente,
+                CORABASTOS_EMERGENCY_CONFIRMATIONS_NEEDED
+            );
+
+            const message = yield* discordCall('interaction.editReply', () =>
+                interaction.editReply({ embeds: [embed] })
+            );
+
+            yield* discordCall('message.react', () => message.react(CORABASTOS_CONFIRM_EMOJI));
+            yield* discordCall('message.react', () => message.react(CORABASTOS_CANCEL_EMOJI));
+
+            yield* corabastosManager.updateEmergencyRequestMessage(emergencyRequest.id, message.id);
+        }).pipe(
+            Effect.catchTag('PendingEmergencyRequestError', error =>
+                Effect.gen(function* () {
+                    const embed = createErrorEmbed('Error', corabastosErrorMessage(error));
+                    yield* discordCall('interaction.editReply', () =>
+                        interaction.editReply({ embeds: [embed] })
+                    );
+                })
+            ),
+            Effect.catchCause(cause =>
+                Effect.gen(function* () {
+                    yield* Effect.logError('Error in emergency command:', cause);
+                    const embed = createErrorEmbed(
+                        'Error',
+                        'Error al crear solicitud de emergencia'
+                    );
+                    yield* discordCall('interaction.editReply', () =>
+                        interaction.editReply({ embeds: [embed] })
+                    ).pipe(Effect.ignore);
+                })
+            )
         );
-
-        // Create emergency request embed
-        const embed = createEmergencyRequestEmbed(
-            interaction.user,
-            reason,
-            paciente,
-            CORABASTOS_EMERGENCY_CONFIRMATIONS_NEEDED
-        );
-
-        const message = await interaction.editReply({ embeds: [embed] });
-
-        // Add reaction emojis for confirmation
-        await message.react(CORABASTOS_CONFIRM_EMOJI);
-        await message.react(CORABASTOS_CANCEL_EMOJI);
-
-        // Update emergency request with message ID
-        await corabastosManager.updateEmergencyRequestMessage(emergencyRequest.id, message.id);
-    } catch (error) {
-        console.error('Error in emergency command:', error);
-        const errorMessage =
-            error instanceof Error ? error.message : 'Error al crear solicitud de emergencia';
-        const embed = createErrorEmbed('Error', errorMessage);
-        await interaction.editReply({ embeds: [embed] });
     }
-}
+);
 
-export async function handleCorabastosStatusCommand(
-    interaction: ChatInputCommandInteraction,
-    corabastosManager: CorabastosManager
-): Promise<void> {
-    await interaction.deferReply();
+export const handleCorabastosStatusCommand = Effect.fn('handleCorabastosStatusCommand')(function* (
+    interaction: ChatInputCommandInteraction
+) {
+    const corabastosManager = yield* CorabastosManager;
 
-    try {
-        const currentSession = await corabastosManager.getCurrentWeekSession();
-        const agendaItems = await corabastosManager.getCurrentWeekAgenda();
-        const pendingRequests = await corabastosManager.getPendingEmergencyRequests();
-        const stats = await corabastosManager.getStats();
+    yield* discordCall('interaction.deferReply', () => interaction.deferReply());
+
+    yield* Effect.gen(function* () {
+        const currentSession = yield* corabastosManager.getCurrentWeekSession();
+        const agendaItems = yield* corabastosManager.getCurrentWeekAgenda();
+        const pendingRequests = yield* corabastosManager.getPendingEmergencyRequests();
+        const stats = yield* corabastosManager.getStats();
 
         const embed = createCorabastosStatusEmbed(
             currentSession,
@@ -221,26 +285,40 @@ export async function handleCorabastosStatusCommand(
             stats
         );
 
-        await interaction.editReply({ embeds: [embed] });
-    } catch (error) {
-        console.error('Error in status command:', error);
-        const embed = createErrorEmbed('Error', 'No se pudo obtener el estado del corabastos.');
-        await interaction.editReply({ embeds: [embed] });
-    }
-}
+        yield* discordCall('interaction.editReply', () =>
+            interaction.editReply({ embeds: [embed] })
+        );
+    }).pipe(
+        Effect.catchCause(cause =>
+            Effect.gen(function* () {
+                yield* Effect.logError('Error in status command:', cause);
+                const embed = createErrorEmbed(
+                    'Error',
+                    'No se pudo obtener el estado del corabastos.'
+                );
+                yield* discordCall('interaction.editReply', () =>
+                    interaction.editReply({ embeds: [embed] })
+                ).pipe(Effect.ignore);
+            })
+        )
+    );
+});
 
 // Admin command to manually create a corabastos session
-export async function handleCreateCorabastosSession(
-    interaction: ChatInputCommandInteraction,
-    corabastosManager: CorabastosManager
-): Promise<void> {
+export const handleCreateCorabastosSession = Effect.fn('handleCreateCorabastosSession')(function* (
+    interaction: ChatInputCommandInteraction
+) {
+    const corabastosManager = yield* CorabastosManager;
+
     // Check admin permissions
     const member = interaction.member;
     if (!member || typeof member.permissions === 'string') {
-        await interaction.reply({
-            content: '❌ No tienes permisos para crear sesiones de corabastos.',
-            ephemeral: true,
-        });
+        yield* discordCall('interaction.reply', () =>
+            interaction.reply({
+                content: '❌ No tienes permisos para crear sesiones de corabastos.',
+                ephemeral: true,
+            })
+        );
         return;
     }
 
@@ -250,30 +328,40 @@ export async function handleCreateCorabastosSession(
     ]);
 
     if (!hasPermission) {
-        await interaction.reply({
-            content:
-                '❌ Solo los administradores y moderadores pueden crear sesiones de corabastos.',
-            ephemeral: true,
-        });
+        yield* discordCall('interaction.reply', () =>
+            interaction.reply({
+                content:
+                    '❌ Solo los administradores y moderadores pueden crear sesiones de corabastos.',
+                ephemeral: true,
+            })
+        );
         return;
     }
 
-    await interaction.deferReply({ ephemeral: true });
+    yield* discordCall('interaction.deferReply', () => interaction.deferReply({ ephemeral: true }));
 
-    try {
-        const session = await corabastosManager.getOrCreateCurrentWeekSession(interaction.user);
+    yield* Effect.gen(function* () {
+        const session = yield* corabastosManager.getOrCreateCurrentWeekSession(interaction.user);
 
         const weekStart = dayjs(session.weekStart).format('MMM DD');
         const weekEnd = dayjs(session.weekEnd).format('MMM DD, YYYY');
         const sessionWeek = `${weekStart} - ${weekEnd}`;
 
-        await interaction.editReply({
-            content: `✅ Sesión de corabastos creada/obtenida para la semana ${sessionWeek}.`,
-        });
-    } catch (error) {
-        console.error('Error creating corabastos session:', error);
-        await interaction.editReply({
-            content: '❌ Error al crear la sesión de corabastos.',
-        });
-    }
-}
+        yield* discordCall('interaction.editReply', () =>
+            interaction.editReply({
+                content: `✅ Sesión de corabastos creada/obtenida para la semana ${sessionWeek}.`,
+            })
+        );
+    }).pipe(
+        Effect.catchCause(cause =>
+            Effect.gen(function* () {
+                yield* Effect.logError('Error creating corabastos session:', cause);
+                yield* discordCall('interaction.editReply', () =>
+                    interaction.editReply({
+                        content: '❌ Error al crear la sesión de corabastos.',
+                    })
+                ).pipe(Effect.ignore);
+            })
+        )
+    );
+});

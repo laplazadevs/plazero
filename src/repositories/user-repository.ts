@@ -1,58 +1,64 @@
-import { User } from 'discord.js';
+import type { PlazeroUser } from '../types/user.js';
+import { Context, Effect, Layer, Schema } from 'effect';
+import * as SqlClient from 'effect/unstable/sql/SqlClient';
 
-import { DatabaseService } from '../services/database-service.js';
+import { UserRow } from '../db/schemas.js';
 
-export interface UserData {
-    id: string;
-    username: string;
-    discriminator?: string;
-    avatar_url?: string;
-    created_at: Date;
-    updated_at: Date;
-}
+const decodeUserRows = Schema.decodeUnknownEffect(Schema.Array(UserRow));
 
-export class UserRepository {
-    private db: DatabaseService;
+export class UserRepository extends Context.Service<UserRepository>()('plazero/UserRepository', {
+    make: Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
 
-    constructor() {
-        this.db = DatabaseService.getInstance();
-    }
+        const upsertUser = Effect.fn('UserRepository.upsertUser')(function* (user: PlazeroUser) {
+            const rows = yield* sql`
+                INSERT INTO users (id, username, discriminator, avatar_url, updated_at)
+                VALUES (
+                    ${user.id},
+                    ${user.username},
+                    ${user.discriminator ?? null},
+                    ${user.displayAvatarURL?.() ?? null},
+                    NOW()
+                )
+                ON CONFLICT (id)
+                DO UPDATE SET
+                    username = EXCLUDED.username,
+                    discriminator = EXCLUDED.discriminator,
+                    avatar_url = EXCLUDED.avatar_url,
+                    updated_at = NOW()
+                RETURNING *
+            `;
+            const users = yield* decodeUserRows(rows);
+            return users[0];
+        });
 
-    public async upsertUser(user: User): Promise<UserData> {
-        const query = `
-            INSERT INTO users (id, username, discriminator, avatar_url, updated_at)
-            VALUES ($1, $2, $3, $4, NOW())
-            ON CONFLICT (id) 
-            DO UPDATE SET 
-                username = EXCLUDED.username,
-                discriminator = EXCLUDED.discriminator,
-                avatar_url = EXCLUDED.avatar_url,
-                updated_at = NOW()
-            RETURNING *
-        `;
+        // Minimal row used when only a Discord id is known (winner backfill).
+        const ensureUserId = Effect.fn('UserRepository.ensureUserId')(function* (userId: string) {
+            yield* sql`
+                INSERT INTO users (id, username, updated_at)
+                VALUES (${userId}, 'Unknown', NOW())
+                ON CONFLICT (id) DO NOTHING
+            `;
+        });
 
-        const result = await this.db.query(query, [
-            user.id,
-            user.username,
-            user.discriminator,
-            user.displayAvatarURL(),
-        ]);
+        const getUser = Effect.fn('UserRepository.getUser')(function* (userId: string) {
+            const rows = yield* sql`SELECT * FROM users WHERE id = ${userId}`;
+            const users = yield* decodeUserRows(rows);
+            return users.length > 0 ? users[0] : null;
+        });
 
-        return result.rows[0];
-    }
+        const getUsers = Effect.fn('UserRepository.getUsers')(function* (
+            userIds: ReadonlyArray<string>
+        ) {
+            if (userIds.length === 0) {
+                return [] as ReadonlyArray<UserRow>;
+            }
+            const rows = yield* sql`SELECT * FROM users WHERE id IN ${sql.in(userIds)}`;
+            return yield* decodeUserRows(rows);
+        });
 
-    public async getUser(userId: string): Promise<UserData | null> {
-        const query = 'SELECT * FROM users WHERE id = $1';
-        const result = await this.db.query(query, [userId]);
-        return result.rows[0] || null;
-    }
+        return { upsertUser, ensureUserId, getUser, getUsers } as const;
+    }),
+}) {}
 
-    public async getUsers(userIds: string[]): Promise<UserData[]> {
-        if (userIds.length === 0) return [];
-
-        const placeholders = userIds.map((_, index) => `$${index + 1}`).join(',');
-        const query = `SELECT * FROM users WHERE id IN (${placeholders})`;
-        const result = await this.db.query(query, userIds);
-        return result.rows;
-    }
-}
+export const UserRepositoryLive = Layer.effect(UserRepository)(UserRepository.make);

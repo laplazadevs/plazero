@@ -1,9 +1,9 @@
-import { User } from 'discord.js';
+import type { PlazeroUser } from './user.js';
 
 export interface VoteData {
     id: string;
-    targetUser: User;
-    initiator: User;
+    targetUser: PlazeroUser;
+    initiator: PlazeroUser;
     reason: string;
     startTime: Date;
     upVotes: Map<string, number>; // userId -> vote weight (1 for normal, 2 for boosters)

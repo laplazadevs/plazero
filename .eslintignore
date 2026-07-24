@@ -6,3 +6,5 @@
 /misc
 /node_modules
 /temp
+.repos
+api

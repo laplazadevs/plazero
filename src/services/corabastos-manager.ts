@@ -1,830 +1,815 @@
+import type {
+    CorabastosAgendaRow,
+    CorabastosEmergencyRequestRow,
+    CorabastosSessionRow,
+} from '../db/schemas.js';
+import type {
+    CorabastosAgendaItem,
+    CorabastosEmergencyRequest,
+    CorabastosSession,
+} from '../types/corabastos.js';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone.js';
-import { EmbedBuilder, Guild, TextChannel, User, VoiceChannel } from 'discord.js';
+import { Client, EmbedBuilder, Guild, TextChannel, VoiceChannel } from 'discord.js';
+import { Context, Effect, Layer } from 'effect';
 
 import {
     CORABASTOS_FRIDAY_HOUR,
     CORABASTOS_VOICE_CHANNEL_NAME,
     GENERAL_CHANNEL_NAME,
 } from '../config/constants.js';
-import { CorabastosRepository } from '../repositories/corabastos-repository.js';
+import { discordCall, DiscordClient } from '../discord/DiscordClient.js';
 import {
-    CorabastosAgendaData,
-    CorabastosAgendaItem,
-    CorabastosEmergencyRequest,
-    CorabastosEmergencyRequestData,
-    CorabastosSession,
-    CorabastosSessionData,
-    CorabastosStats,
-    isValidTurno,
-} from '../types/corabastos.js';
+    DuplicateAgendaTopicError,
+    EmergencyRequestNotFoundError,
+    InvalidTurnoError,
+    PendingEmergencyRequestError,
+} from '../domain/errors.js';
+import { CorabastosRepository } from '../repositories/corabastos-repository.js';
+import { isValidTurno } from '../types/corabastos.js';
+import { minimalPlazeroUser, type PlazeroUser, plazeroUserFromRow } from '../types/user.js';
 
 dayjs.extend(timezone);
 
-export class CorabastosManager {
-    private repository: CorabastosRepository;
+const mapSessionRowToSession = (row: CorabastosSessionRow): CorabastosSession => ({
+    id: row.id,
+    weekStart: row.week_start,
+    weekEnd: row.week_end,
+    scheduledTime: row.scheduled_time ?? undefined,
+    status: row.status,
+    type: row.type,
+    channelId: row.channel_id ?? undefined,
+    announcementMessageId: row.announcement_message_id ?? undefined,
+    announcementChannelId: row.announcement_channel_id ?? undefined,
+    createdBy: minimalPlazeroUser(row.created_by_id ?? 'unknown'),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+});
 
-    constructor() {
-        this.repository = new CorabastosRepository();
+const mapEmergencyRequestRowToRequest = (
+    row: CorabastosEmergencyRequestRow
+): CorabastosEmergencyRequest => ({
+    id: row.id,
+    requestedBy: minimalPlazeroUser(row.requested_by_id),
+    reason: row.reason,
+    paciente: minimalPlazeroUser(row.paciente_id),
+    status: row.status,
+    confirmationMessageId: row.confirmation_message_id ?? undefined,
+    confirmationsNeeded: row.confirmations_needed,
+    confirmationsReceived: row.confirmations_received,
+    expiresAt: row.expires_at ?? undefined,
+    approvedAt: row.approved_at ?? undefined,
+    sessionId: row.session_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+});
+
+// Corabastos week runs from Saturday 00:01 to Friday 23:59 (Bogota time).
+const getCurrentWeekRange = (): { weekStart: Date; weekEnd: Date } => {
+    const now = dayjs().tz('America/Bogota');
+
+    let weekStart: dayjs.Dayjs;
+    let weekEnd: dayjs.Dayjs;
+
+    if (now.day() === 6) {
+        // Saturday: a new corabastos week starts today
+        weekStart = now.hour(0).minute(1).second(0).millisecond(0);
+        weekEnd = now.add(6, 'day').hour(23).minute(59).second(59).millisecond(999);
+    } else {
+        const daysSinceSaturday = (now.day() + 1) % 7;
+        weekStart = now
+            .subtract(daysSinceSaturday, 'day')
+            .hour(0)
+            .minute(1)
+            .second(0)
+            .millisecond(0);
+        weekEnd = weekStart.add(6, 'day').hour(23).minute(59).second(59).millisecond(999);
     }
 
-    // Session management
-    public async getCurrentWeekSession(): Promise<CorabastosSession | null> {
-        const sessionData = await this.repository.getCurrentWeekSession();
-        return sessionData ? this.mapSessionDataToSession(sessionData) : null;
+    return {
+        weekStart: weekStart.utc().toDate(),
+        weekEnd: weekEnd.utc().toDate(),
+    };
+};
+
+const getNextFridayAtNoon = (): Date => {
+    const now = dayjs().tz('America/Bogota');
+    const currentWeekFriday = now
+        .startOf('week')
+        .add(5, 'day')
+        .hour(CORABASTOS_FRIDAY_HOUR)
+        .minute(0)
+        .second(0)
+        .millisecond(0);
+
+    if (currentWeekFriday.isAfter(now)) {
+        return currentWeekFriday.utc().toDate();
     }
 
-    public async getOrCreateCurrentWeekSession(createdBy?: User): Promise<CorabastosSession> {
-        let session = await this.getCurrentWeekSession();
+    return currentWeekFriday.add(1, 'week').utc().toDate();
+};
 
-        if (!session) {
-            const { weekStart, weekEnd } = this.getCurrentWeekRange();
-            const scheduledTime = this.getNextFridayAtNoon();
+const findGeneralChannelIn = (guild: Guild): TextChannel | null => {
+    const channel = guild.channels.cache.find(
+        (ch): ch is TextChannel =>
+            ch instanceof TextChannel &&
+            ch.name.toLowerCase().includes(GENERAL_CHANNEL_NAME.toLowerCase())
+    );
+    return channel ?? null;
+};
 
-            const sessionData = await this.repository.createSession(
-                weekStart,
-                weekEnd,
-                'regular',
-                scheduledTime,
-                createdBy
-            );
+export class CorabastosManager extends Context.Service<CorabastosManager>()(
+    'plazero/CorabastosManager',
+    {
+        make: Effect.gen(function* () {
+            const repository = yield* CorabastosRepository;
+            const client: Client<true> = yield* DiscordClient;
 
-            session = this.mapSessionDataToSession(sessionData);
-        }
-
-        return session;
-    }
-
-    public async createEmergencySession(
-        emergencyRequest: CorabastosEmergencyRequest,
-        createdBy: User
-    ): Promise<CorabastosSession> {
-        const now = dayjs().tz('America/Bogota');
-        const weekStart = now.startOf('week').utc().toDate();
-        const weekEnd = now.endOf('week').utc().toDate();
-
-        const sessionData = await this.repository.createSession(
-            weekStart,
-            weekEnd,
-            'emergency',
-            now.utc().toDate(),
-            createdBy
-        );
-
-        // Link emergency request to session
-        await this.repository.linkEmergencyToSession(emergencyRequest.id, sessionData.id);
-
-        return this.mapSessionDataToSession(sessionData);
-    }
-
-    // Agenda management
-    public async addAgendaItem(
-        user: User,
-        turno: number,
-        topic: string,
-        description?: string
-    ): Promise<{ agendaItem: CorabastosAgendaItem; session: CorabastosSession }> {
-        if (!isValidTurno(turno)) {
-            throw new Error(`Turno inválido: ${turno}. Debe estar entre 0 y 8.`);
-        }
-
-        const session = await this.getOrCreateCurrentWeekSession(user);
-
-        // Check if user already has this topic in this turno
-        const existingItems = await this.repository.getUserAgendaItems(session.id, user.id);
-        const duplicateItem = existingItems.find(
-            item => item.turno === turno && item.topic.toLowerCase() === topic.toLowerCase()
-        );
-
-        if (duplicateItem) {
-            throw new Error('Ya tienes un tema similar agendado para este turno.');
-        }
-
-        const agendaData = await this.repository.addAgendaItem(
-            session.id,
-            user,
-            turno,
-            topic,
-            description
-        );
-        const agendaItem = await this.mapAgendaDataToItem(agendaData);
-
-        return { agendaItem, session };
-    }
-
-    public async confirmAgendaItem(agendaId: string, messageId: string): Promise<void> {
-        await this.repository.confirmAgendaItem(agendaId, messageId);
-    }
-
-    public async cancelAgendaItem(agendaId: string): Promise<void> {
-        await this.repository.cancelAgendaItem(agendaId);
-    }
-
-    public async getSessionAgenda(sessionId: string): Promise<CorabastosAgendaItem[]> {
-        const agendaData = await this.repository.getSessionAgenda(sessionId);
-        return await Promise.all(agendaData.map(data => this.mapAgendaDataToItem(data)));
-    }
-
-    public async getCurrentWeekAgenda(): Promise<CorabastosAgendaItem[]> {
-        const session = await this.getCurrentWeekSession();
-        if (!session) {
-            return [];
-        }
-        return await this.getSessionAgenda(session.id);
-    }
-
-    // Emergency request management
-    public async createEmergencyRequest(
-        user: User,
-        reason: string,
-        paciente: User
-    ): Promise<CorabastosEmergencyRequest> {
-        // Check if user has pending emergency requests
-        const pendingRequests = await this.repository.getPendingEmergencyRequests();
-        const userPendingRequest = pendingRequests.find(req => req.requested_by_id === user.id);
-
-        if (userPendingRequest) {
-            throw new Error('Ya tienes una solicitud de corabastos de emergencia pendiente.');
-        }
-
-        const requestData = await this.repository.createEmergencyRequest(user, reason, paciente);
-        return this.mapEmergencyRequestDataToRequest(requestData);
-    }
-
-    public async updateEmergencyRequestMessage(
-        requestId: string,
-        messageId: string
-    ): Promise<void> {
-        await this.repository.updateEmergencyRequestMessage(requestId, messageId);
-    }
-
-    public async addEmergencyConfirmation(requestId: string, user: User): Promise<boolean> {
-        return await this.repository.addEmergencyConfirmation(requestId, user);
-    }
-
-    public async getEmergencyRequest(
-        requestId: string
-    ): Promise<CorabastosEmergencyRequest | null> {
-        const requestData = await this.repository.getEmergencyRequest(requestId);
-        return requestData ? this.mapEmergencyRequestDataToRequest(requestData) : null;
-    }
-
-    public async checkEmergencyRequestApproval(requestId: string): Promise<{
-        isApproved: boolean;
-        confirmationsReceived: number;
-        confirmationsNeeded: number;
-        pacienteConfirmed: boolean;
-    }> {
-        const request = await this.getEmergencyRequest(requestId);
-        if (!request) {
-            throw new Error('Solicitud de emergencia no encontrada.');
-        }
-
-        // Check if the paciente has confirmed
-        const pacienteConfirmed = await this.repository.hasPacienteConfirmed(
-            requestId,
-            request.paciente.id
-        );
-
-        // Both conditions must be met: enough confirmations AND paciente confirmed
-        const isApproved =
-            request.confirmationsReceived >= request.confirmationsNeeded && pacienteConfirmed;
-
-        return {
-            isApproved,
-            confirmationsReceived: request.confirmationsReceived,
-            confirmationsNeeded: request.confirmationsNeeded,
-            pacienteConfirmed,
-        };
-    }
-
-    public async approveEmergencyRequest(requestId: string): Promise<void> {
-        await this.repository.updateEmergencyRequestStatus(requestId, 'approved');
-    }
-
-    public async rejectEmergencyRequest(requestId: string): Promise<void> {
-        await this.repository.updateEmergencyRequestStatus(requestId, 'rejected');
-    }
-
-    public async getPendingEmergencyRequests(): Promise<CorabastosEmergencyRequest[]> {
-        const requestsData = await this.repository.getPendingEmergencyRequests();
-        return requestsData.map(data => this.mapEmergencyRequestDataToRequest(data));
-    }
-
-    // Channel management helpers
-    public async findCorabastosVoiceChannel(guild: Guild): Promise<VoiceChannel | null> {
-        const channel = guild.channels.cache.find(
-            ch =>
-                ch.isVoiceBased() &&
-                ch.name.toLowerCase().includes(CORABASTOS_VOICE_CHANNEL_NAME.toLowerCase())
-        ) as VoiceChannel;
-
-        return channel || null;
-    }
-
-    public async findGeneralChannel(guild: Guild): Promise<TextChannel | null> {
-        const channel = guild.channels.cache.find(
-            ch =>
-                ch.isTextBased() &&
-                ch.name.toLowerCase().includes(GENERAL_CHANNEL_NAME.toLowerCase())
-        ) as TextChannel;
-
-        return channel || null;
-    }
-
-    // Statistics
-    public async getStats(): Promise<CorabastosStats> {
-        return await this.repository.getStats();
-    }
-
-    // Turno notification system
-    public async processActiveSessionTurnos(client: any): Promise<void> {
-        const session = await this.getCurrentWeekSession();
-        if (!session || session.status !== 'scheduled') {
-            console.log(
-                `processActiveSessionTurnos: No scheduled session found or session status is ${session?.status}`
-            );
-            return; // Only process scheduled sessions
-        }
-
-        const now = dayjs().tz('America/Bogota');
-        const currentHour = now.hour();
-        const currentMinute = now.minute();
-
-        // Only process notifications on Fridays (day 5)
-        // Corabastos sessions are meant to happen only on Fridays
-        if (now.day() !== 5) {
-            console.log(
-                `processActiveSessionTurnos: Not Friday (current day: ${now.day()}), skipping`
-            );
-            return;
-        }
-
-        // Check for pre-session agenda notification (11:50 AM - 10 minutes before Turno 0)
-        if (currentHour === 11 && currentMinute === 50) {
-            console.log(
-                `processActiveSessionTurnos: Pre-session notification time (11:50 AM), sending agenda notification`
-            );
-            await this.sendPreSessionAgendaNotification(client, session);
-            return;
-        }
-
-        // Only process turno notifications at the exact start of each hour (minute 0)
-        if (currentMinute !== 0) {
-            console.log(
-                `processActiveSessionTurnos: Not at minute 0 (current minute: ${currentMinute}), skipping turno notifications`
-            );
-            return;
-        }
-
-        // Check if we're in a valid turno time (12 PM to 10 PM)
-        if (currentHour < 12 || currentHour > 22) {
-            console.log(
-                `processActiveSessionTurnos: Not in valid turno time (current hour: ${currentHour}), skipping`
-            );
-            return;
-        }
-
-        const currentTurno = currentHour - 12; // Turno 0 = 12 PM, Turno 1 = 1 PM, etc.
-        console.log(
-            `processActiveSessionTurnos: Processing turno ${currentTurno} at ${currentHour}:${currentMinute}`
-        );
-
-        // Get agenda items for current turno
-        const agendaItems = await this.repository.getSessionAgenda(session.id);
-        const currentTurnoItems = agendaItems.filter(
-            item => item.turno === currentTurno && item.status === 'confirmed'
-        );
-
-        console.log(
-            `processActiveSessionTurnos: Found ${currentTurnoItems.length} confirmed items for turno ${currentTurno}`
-        );
-        if (currentTurnoItems.length === 0) {
-            console.log(
-                `processActiveSessionTurnos: No confirmed agenda items for turno ${currentTurno}, skipping`
-            );
-            return;
-        }
-
-        // Check if we already notified for this turno today
-        const today = now.startOf('day').toDate();
-        const alreadyNotified = await this.repository.hasNotificationBeenSent(
-            session.id,
-            currentTurno,
-            today
-        );
-        console.log(
-            `processActiveSessionTurnos: Already notified for turno ${currentTurno} today: ${alreadyNotified}`
-        );
-        if (alreadyNotified) {
-            console.log(
-                `processActiveSessionTurnos: Notification already sent for turno ${currentTurno} today, skipping`
-            );
-            return;
-        }
-
-        try {
-            // Send channel notification
-            await this.sendTurnoChannelNotification(
-                client,
-                session,
-                currentTurno,
-                currentTurnoItems
-            );
-
-            // Send DM notifications to agenda submitters
-            await this.sendTurnoDMNotifications(client, currentTurno, currentTurnoItems);
-
-            // Mark notification as sent
-            await this.repository.markNotificationSent(session.id, currentTurno, today);
-
-            console.log(
-                `Sent turno ${currentTurno} notifications for ${currentTurnoItems.length} agenda items`
-            );
-        } catch (error) {
-            console.error(`Error processing turno ${currentTurno} notifications:`, error);
-        }
-    }
-
-    private async sendPreSessionAgendaNotification(
-        client: any,
-        session: CorabastosSession
-    ): Promise<void> {
-        // Check if we already sent the pre-session notification today
-        const now = dayjs().tz('America/Bogota');
-        const today = now.startOf('day').toDate();
-
-        // Use a special turno number (-1) to track pre-session notifications
-        if (await this.repository.hasNotificationBeenSent(session.id, -1, today)) {
-            return;
-        }
-
-        try {
-            // Find general channel first
-            const guild = client.guilds.cache.first();
-            if (!guild) return;
-
-            const generalChannel = await this.findGeneralChannel(guild);
-            if (!generalChannel) return;
-
-            // Get all confirmed agenda items for today
-            const agendaItems = await this.repository.getSessionAgenda(session.id);
-            const confirmedItems = agendaItems.filter(item => item.status === 'confirmed');
-
-            if (confirmedItems.length === 0) {
-                // Send encouragement notification when no agenda items
-                await this.sendNoAgendaEncouragementNotification(generalChannel);
-                await this.repository.markNotificationSent(session.id, -1, today);
-                console.log('Sent no-agenda encouragement notification');
-                return;
-            }
-
-            // Group items by turno
-            const itemsByTurno = new Map<number, CorabastosAgendaData[]>();
-            confirmedItems.forEach(item => {
-                if (!itemsByTurno.has(item.turno)) {
-                    itemsByTurno.set(item.turno, []);
+            const getCurrentWeekSession = Effect.fn('CorabastosManager.getCurrentWeekSession')(
+                function* () {
+                    const sessionRow = yield* repository.getCurrentWeekSession();
+                    return sessionRow ? mapSessionRowToSession(sessionRow) : null;
                 }
-                const turnoItems = itemsByTurno.get(item.turno);
-                if (turnoItems) {
-                    turnoItems.push(item);
+            );
+
+            const getOrCreateCurrentWeekSession = Effect.fn(
+                'CorabastosManager.getOrCreateCurrentWeekSession'
+            )(function* (createdBy?: PlazeroUser) {
+                const session = yield* getCurrentWeekSession();
+                if (session) {
+                    return session;
                 }
+
+                const { weekStart, weekEnd } = getCurrentWeekRange();
+                const sessionRow = yield* repository.createSession(
+                    weekStart,
+                    weekEnd,
+                    'regular',
+                    getNextFridayAtNoon(),
+                    createdBy
+                );
+                return mapSessionRowToSession(sessionRow);
             });
 
-            // Create agenda preview embed
-            const embed = new EmbedBuilder()
-                .setTitle('📅 Agenda del Corabastos de Hoy')
-                .setDescription(
-                    '¡El corabastos comienza en **10 minutos**! Aquí está la agenda completa del día:'
-                )
-                .setColor(0x00ff00)
-                .setTimestamp();
+            const createEmergencySession = Effect.fn('CorabastosManager.createEmergencySession')(
+                function* (emergencyRequest: CorabastosEmergencyRequest, createdBy: PlazeroUser) {
+                    const now = dayjs().tz('America/Bogota');
+                    const weekStart = now.startOf('week').utc().toDate();
+                    const weekEnd = now.endOf('week').utc().toDate();
 
-            // Add fields for each turno with items
-            const sortedTurnos = Array.from(itemsByTurno.keys()).sort((a, b) => a - b);
+                    const sessionRow = yield* repository.createSession(
+                        weekStart,
+                        weekEnd,
+                        'emergency',
+                        now.utc().toDate(),
+                        createdBy
+                    );
 
-            for (const turno of sortedTurnos) {
-                const items = itemsByTurno.get(turno);
-                if (!items) continue;
+                    yield* repository.linkEmergencyToSession(emergencyRequest.id, sessionRow.id);
+                    return mapSessionRowToSession(sessionRow);
+                }
+            );
 
-                const timeStr = turno === 0 ? '12:00 PM' : `${turno}:00 PM`;
+            const mapAgendaRowToItem = Effect.fn('CorabastosManager.mapAgendaRowToItem')(function* (
+                row: CorabastosAgendaRow
+            ) {
+                const userRow = yield* repository.getUserData(row.user_id);
+                const user = userRow
+                    ? plazeroUserFromRow(userRow)
+                    : minimalPlazeroUser(row.user_id);
 
-                const itemsList = items
-                    .map(
-                        (item, index) =>
-                            `${index + 1}. **${item.topic}**${
-                                item.description ? ` - ${item.description}` : ''
-                            }`
+                const item: CorabastosAgendaItem = {
+                    id: row.id,
+                    sessionId: row.session_id,
+                    user,
+                    turno: row.turno,
+                    topic: row.topic,
+                    description: row.description ?? undefined,
+                    status: row.status,
+                    confirmationMessageId: row.confirmation_message_id ?? undefined,
+                    orderIndex: row.order_index,
+                    createdAt: row.created_at,
+                    updatedAt: row.updated_at,
+                };
+                return item;
+            });
+
+            // Agenda management
+            const addAgendaItem = Effect.fn('CorabastosManager.addAgendaItem')(function* (
+                user: PlazeroUser,
+                turno: number,
+                topic: string,
+                description?: string
+            ) {
+                if (!isValidTurno(turno)) {
+                    return yield* Effect.fail(InvalidTurnoError.make({ turno }));
+                }
+
+                const session = yield* getOrCreateCurrentWeekSession(user);
+
+                const existingItems = yield* repository.getUserAgendaItems(session.id, user.id);
+                const duplicateItem = existingItems.find(
+                    item => item.turno === turno && item.topic.toLowerCase() === topic.toLowerCase()
+                );
+
+                if (duplicateItem) {
+                    return yield* Effect.fail(DuplicateAgendaTopicError.make({ turno, topic }));
+                }
+
+                const agendaRow = yield* repository.addAgendaItem(
+                    session.id,
+                    user,
+                    turno,
+                    topic,
+                    description
+                );
+                const agendaItem = yield* mapAgendaRowToItem(agendaRow);
+
+                return { agendaItem, session };
+            });
+
+            const confirmAgendaItem = Effect.fn('CorabastosManager.confirmAgendaItem')(function* (
+                agendaId: string,
+                messageId: string
+            ) {
+                yield* repository.confirmAgendaItem(agendaId, messageId);
+            });
+
+            const cancelAgendaItem = Effect.fn('CorabastosManager.cancelAgendaItem')(function* (
+                agendaId: string
+            ) {
+                yield* repository.cancelAgendaItem(agendaId);
+            });
+
+            const getSessionAgenda = Effect.fn('CorabastosManager.getSessionAgenda')(function* (
+                sessionId: string
+            ) {
+                const agendaRows = yield* repository.getSessionAgenda(sessionId);
+                const items: CorabastosAgendaItem[] = [];
+                for (const row of agendaRows) {
+                    items.push(yield* mapAgendaRowToItem(row));
+                }
+                return items;
+            });
+
+            const getCurrentWeekAgenda = Effect.fn('CorabastosManager.getCurrentWeekAgenda')(
+                function* () {
+                    const session = yield* getCurrentWeekSession();
+                    if (!session) {
+                        return [] as CorabastosAgendaItem[];
+                    }
+                    return yield* getSessionAgenda(session.id);
+                }
+            );
+
+            // Emergency request management
+            const createEmergencyRequest = Effect.fn('CorabastosManager.createEmergencyRequest')(
+                function* (user: PlazeroUser, reason: string, paciente: PlazeroUser) {
+                    const pendingRequests = yield* repository.getPendingEmergencyRequests();
+                    const userPendingRequest = pendingRequests.find(
+                        req => req.requested_by_id === user.id
+                    );
+
+                    if (userPendingRequest) {
+                        return yield* Effect.fail(
+                            PendingEmergencyRequestError.make({ userId: user.id })
+                        );
+                    }
+
+                    const requestRow = yield* repository.createEmergencyRequest(
+                        user,
+                        reason,
+                        paciente
+                    );
+                    return mapEmergencyRequestRowToRequest(requestRow);
+                }
+            );
+
+            const updateEmergencyRequestMessage = Effect.fn(
+                'CorabastosManager.updateEmergencyRequestMessage'
+            )(function* (requestId: string, messageId: string) {
+                yield* repository.updateEmergencyRequestMessage(requestId, messageId);
+            });
+
+            const addEmergencyConfirmation = Effect.fn(
+                'CorabastosManager.addEmergencyConfirmation'
+            )(function* (requestId: string, user: PlazeroUser) {
+                return yield* repository.addEmergencyConfirmation(requestId, user);
+            });
+
+            const getEmergencyRequest = Effect.fn('CorabastosManager.getEmergencyRequest')(
+                function* (requestId: string) {
+                    const requestRow = yield* repository.getEmergencyRequest(requestId);
+                    return requestRow ? mapEmergencyRequestRowToRequest(requestRow) : null;
+                }
+            );
+
+            const checkEmergencyRequestApproval = Effect.fn(
+                'CorabastosManager.checkEmergencyRequestApproval'
+            )(function* (requestId: string) {
+                const request = yield* getEmergencyRequest(requestId);
+                if (!request) {
+                    return yield* Effect.fail(EmergencyRequestNotFoundError.make({ requestId }));
+                }
+
+                const pacienteConfirmed = yield* repository.hasPacienteConfirmed(
+                    requestId,
+                    request.paciente.id
+                );
+
+                const isApproved =
+                    request.confirmationsReceived >= request.confirmationsNeeded &&
+                    pacienteConfirmed;
+
+                return {
+                    isApproved,
+                    confirmationsReceived: request.confirmationsReceived,
+                    confirmationsNeeded: request.confirmationsNeeded,
+                    pacienteConfirmed,
+                };
+            });
+
+            const approveEmergencyRequest = Effect.fn('CorabastosManager.approveEmergencyRequest')(
+                function* (requestId: string) {
+                    yield* repository.updateEmergencyRequestStatus(requestId, 'approved');
+                }
+            );
+
+            const rejectEmergencyRequest = Effect.fn('CorabastosManager.rejectEmergencyRequest')(
+                function* (requestId: string) {
+                    yield* repository.updateEmergencyRequestStatus(requestId, 'rejected');
+                }
+            );
+
+            const getPendingEmergencyRequests = Effect.fn(
+                'CorabastosManager.getPendingEmergencyRequests'
+            )(function* () {
+                const requestRows = yield* repository.getPendingEmergencyRequests();
+                return requestRows.map(mapEmergencyRequestRowToRequest);
+            });
+
+            // Channel helpers
+            const findCorabastosVoiceChannel = Effect.fn(
+                'CorabastosManager.findCorabastosVoiceChannel'
+            )(function* (guild: Guild) {
+                const channel = guild.channels.cache.find(
+                    (ch): ch is VoiceChannel =>
+                        ch instanceof VoiceChannel &&
+                        ch.name.toLowerCase().includes(CORABASTOS_VOICE_CHANNEL_NAME.toLowerCase())
+                );
+                return yield* Effect.succeed(channel ?? null);
+            });
+
+            const findGeneralChannel = Effect.fn('CorabastosManager.findGeneralChannel')(function* (
+                guild: Guild
+            ) {
+                return yield* Effect.succeed(findGeneralChannelIn(guild));
+            });
+
+            const getStats = Effect.fn('CorabastosManager.getStats')(function* () {
+                return yield* repository.getStats();
+            });
+
+            // Turno notification helpers
+            const sendNoAgendaEncouragementNotification = Effect.fn(
+                'CorabastosManager.sendNoAgendaEncouragement'
+            )(function* (generalChannel: TextChannel) {
+                const embed = new EmbedBuilder()
+                    .setTitle('📝 ¡Agenda Vacía para el Corabastos de Hoy!')
+                    .setDescription(
+                        '¡El corabastos comienza en **10 minutos** pero aún no hay temas en la agenda!\n\n' +
+                            '🚀 **¡Es una oportunidad perfecta para participar!**'
                     )
-                    .join('\n');
+                    .setColor(0xffa500)
+                    .addFields(
+                        {
+                            name: '💡 ¿Qué puedes hacer?',
+                            value:
+                                '• Agregar un tema con `/corabastos-agenda agregar`\n' +
+                                '• Compartir una pregunta o consulta\n' +
+                                '• Proponer una discusión interesante\n' +
+                                '• ¡Cualquier tema es bienvenido!',
+                            inline: false,
+                        },
+                        {
+                            name: '⏰ ¿Cuándo?',
+                            value:
+                                '• **Turno 0**: 12:00 PM (¡perfecto para empezar!)\n' +
+                                '• **Turno 1**: 1:00 PM\n' +
+                                '• **Turno 2**: 2:00 PM\n' +
+                                '• Y así hasta las 10:00 PM',
+                            inline: true,
+                        },
+                        {
+                            name: '🎯 Beneficios',
+                            value:
+                                '• Recibirás notificación DM a tu hora\n' +
+                                '• Tu tema aparecerá en @everyone\n' +
+                                '• ¡La comunidad te ayudará!',
+                            inline: true,
+                        }
+                    )
+                    .addFields({
+                        name: '📍 Recordatorio',
+                        value:
+                            '**Canal de voz:** corabastos\n' +
+                            '**Inicio:** En 10 minutos (12:00 PM)\n' +
+                            '**Duración:** ¡Los turnos que necesites!',
+                        inline: false,
+                    })
+                    .setFooter({
+                        text: '¡Los temas se pueden agregar incluso durante el corabastos!',
+                    })
+                    .setTimestamp();
 
-                embed.addFields({
-                    name: `🕐 Turno ${turno} (${timeStr})`,
-                    value: itemsList,
-                    inline: false,
-                });
-            }
-
-            embed.addFields(
-                {
-                    name: '📍 Ubicación',
-                    value: 'Canal de voz **corabastos**',
-                    inline: true,
-                },
-                {
-                    name: '⏰ Inicio',
-                    value: 'En **10 minutos** (12:00 PM)',
-                    inline: true,
-                }
-            );
-
-            // Send the notification (no @everyone for pre-session)
-            await generalChannel.send({ embeds: [embed] });
-
-            // Mark pre-session notification as sent
-            await this.repository.markNotificationSent(session.id, -1, today);
-
-            console.log(
-                `Sent pre-session agenda notification for ${confirmedItems.length} agenda items`
-            );
-        } catch (error) {
-            console.error('Error sending pre-session agenda notification:', error);
-        }
-    }
-
-    private async sendNoAgendaEncouragementNotification(generalChannel: any): Promise<void> {
-        const embed = new EmbedBuilder()
-            .setTitle('📝 ¡Agenda Vacía para el Corabastos de Hoy!')
-            .setDescription(
-                '¡El corabastos comienza en **10 minutos** pero aún no hay temas en la agenda!\n\n' +
-                    '🚀 **¡Es una oportunidad perfecta para participar!**'
-            )
-            .setColor(0xffa500) // Orange color for encouragement
-            .addFields(
-                {
-                    name: '💡 ¿Qué puedes hacer?',
-                    value:
-                        '• Agregar un tema con `/corabastos-agenda agregar`\n' +
-                        '• Compartir una pregunta o consulta\n' +
-                        '• Proponer una discusión interesante\n' +
-                        '• ¡Cualquier tema es bienvenido!',
-                    inline: false,
-                },
-                {
-                    name: '⏰ ¿Cuándo?',
-                    value:
-                        '• **Turno 0**: 12:00 PM (¡perfecto para empezar!)\n' +
-                        '• **Turno 1**: 1:00 PM\n' +
-                        '• **Turno 2**: 2:00 PM\n' +
-                        '• Y así hasta las 10:00 PM',
-                    inline: true,
-                },
-                {
-                    name: '🎯 Beneficios',
-                    value:
-                        '• Recibirás notificación DM a tu hora\n' +
-                        '• Tu tema aparecerá en @everyone\n' +
-                        '• ¡La comunidad te ayudará!',
-                    inline: true,
-                }
-            )
-            .addFields({
-                name: '📍 Recordatorio',
-                value:
-                    '**Canal de voz:** corabastos\n' +
-                    '**Inicio:** En 10 minutos (12:00 PM)\n' +
-                    '**Duración:** ¡Los turnos que necesites!',
-                inline: false,
-            })
-            .setFooter({
-                text: '¡Los temas se pueden agregar incluso durante el corabastos!',
-            })
-            .setTimestamp();
-
-        await generalChannel.send({ embeds: [embed] });
-    }
-
-    private async sendTurnoChannelNotification(
-        client: any,
-        session: CorabastosSession,
-        turno: number,
-        items: CorabastosAgendaData[]
-    ): Promise<void> {
-        // Find general channel to send notification
-        const guild = client.guilds.cache.first();
-        if (!guild) return;
-
-        const generalChannel = await this.findGeneralChannel(guild);
-        if (!generalChannel) return;
-
-        const timeStr = turno === 0 ? '12:00 PM' : `${turno}:00 PM`;
-
-        const embed = new EmbedBuilder()
-            .setTitle(`🔔 Turno ${turno} - ${timeStr}`)
-            .setDescription(
-                `Es hora del **Turno ${turno}** del corabastos. Los siguientes temas están programados:`
-            )
-            .setColor(0x0099ff)
-            .setTimestamp();
-
-        // Add each agenda item as a field
-        items.forEach((item, index) => {
-            embed.addFields({
-                name: `📝 Tema ${index + 1}`,
-                value: `**${item.topic}**${item.description ? `\n${item.description}` : ''}`,
-                inline: false,
+                yield* discordCall('channel.send', () => generalChannel.send({ embeds: [embed] }));
             });
-        });
 
-        embed.addFields({
-            name: '📍 Ubicación',
-            value: 'Únanse al canal de voz **corabastos** para participar',
-            inline: false,
-        });
+            const sendPreSessionAgendaNotification = Effect.fn(
+                'CorabastosManager.sendPreSessionAgendaNotification'
+            )(function* (session: CorabastosSession) {
+                const now = dayjs().tz('America/Bogota');
+                const today = now.startOf('day').toDate();
 
-        await generalChannel.send({
-            content: '@everyone',
-            embeds: [embed],
-        });
-    }
+                // Turno -1 tracks the pre-session notification
+                if (yield* repository.hasNotificationBeenSent(session.id, -1, today)) {
+                    return;
+                }
 
-    private async sendTurnoDMNotifications(
-        client: any,
-        turno: number,
-        items: CorabastosAgendaData[]
-    ): Promise<void> {
-        const timeStr = turno === 0 ? '12:00 PM' : `${turno}:00 PM`;
+                const guild = client.guilds.cache.first();
+                if (!guild) return;
 
-        for (const item of items) {
-            try {
-                const user = await client.users.fetch(item.user_id);
-                if (!user) continue;
+                const generalChannel = findGeneralChannelIn(guild);
+                if (!generalChannel) return;
+
+                const agendaRows = yield* repository.getSessionAgenda(session.id);
+                const confirmedItems = agendaRows.filter(item => item.status === 'confirmed');
+
+                if (confirmedItems.length === 0) {
+                    yield* sendNoAgendaEncouragementNotification(generalChannel);
+                    yield* repository.markNotificationSent(session.id, -1, today);
+                    yield* Effect.logInfo('Sent no-agenda encouragement notification');
+                    return;
+                }
+
+                const itemsByTurno = new Map<number, CorabastosAgendaRow[]>();
+                for (const item of confirmedItems) {
+                    const turnoItems = itemsByTurno.get(item.turno) ?? [];
+                    turnoItems.push(item);
+                    itemsByTurno.set(item.turno, turnoItems);
+                }
 
                 const embed = new EmbedBuilder()
-                    .setTitle(`⏰ Recordatorio de Corabastos - Turno ${turno}`)
+                    .setTitle('📅 Agenda del Corabastos de Hoy')
                     .setDescription(
-                        `¡Es hora de tu tema en el corabastos!\n\n` +
-                            `**Tu tema:** ${item.topic}\n` +
-                            `**Turno:** ${turno} (${timeStr})\n` +
-                            `**Ubicación:** Canal de voz corabastos`
+                        '¡El corabastos comienza en **10 minutos**! Aquí está la agenda completa del día:'
                     )
                     .setColor(0x00ff00)
                     .setTimestamp();
 
-                if (item.description) {
+                const sortedTurnos = [...itemsByTurno.keys()].sort((a, b) => a - b);
+                for (const turno of sortedTurnos) {
+                    const items = itemsByTurno.get(turno);
+                    if (!items) continue;
+
+                    const timeStr = turno === 0 ? '12:00 PM' : `${turno}:00 PM`;
+                    const itemsList = items
+                        .map(
+                            (item, index) =>
+                                `${index + 1}. **${item.topic}**${
+                                    item.description ? ` - ${item.description}` : ''
+                                }`
+                        )
+                        .join('\n');
+
                     embed.addFields({
-                        name: '📋 Descripción',
-                        value: item.description,
+                        name: `🕐 Turno ${turno} (${timeStr})`,
+                        value: itemsList,
                         inline: false,
                     });
                 }
 
+                embed.addFields(
+                    {
+                        name: '📍 Ubicación',
+                        value: 'Canal de voz **corabastos**',
+                        inline: true,
+                    },
+                    {
+                        name: '⏰ Inicio',
+                        value: 'En **10 minutos** (12:00 PM)',
+                        inline: true,
+                    }
+                );
+
+                yield* discordCall('channel.send', () => generalChannel.send({ embeds: [embed] }));
+                yield* repository.markNotificationSent(session.id, -1, today);
+
+                yield* Effect.logInfo(
+                    `Sent pre-session agenda notification for ${confirmedItems.length} agenda items`
+                );
+            });
+
+            const sendTurnoChannelNotification = Effect.fn(
+                'CorabastosManager.sendTurnoChannelNotification'
+            )(function* (turno: number, items: ReadonlyArray<CorabastosAgendaRow>) {
+                const guild = client.guilds.cache.first();
+                if (!guild) return;
+
+                const generalChannel = findGeneralChannelIn(guild);
+                if (!generalChannel) return;
+
+                const timeStr = turno === 0 ? '12:00 PM' : `${turno}:00 PM`;
+
+                const embed = new EmbedBuilder()
+                    .setTitle(`🔔 Turno ${turno} - ${timeStr}`)
+                    .setDescription(
+                        `Es hora del **Turno ${turno}** del corabastos. Los siguientes temas están programados:`
+                    )
+                    .setColor(0x0099ff)
+                    .setTimestamp();
+
+                items.forEach((item, index) => {
+                    embed.addFields({
+                        name: `📝 Tema ${index + 1}`,
+                        value: `**${item.topic}**${
+                            item.description ? `\n${item.description}` : ''
+                        }`,
+                        inline: false,
+                    });
+                });
+
                 embed.addFields({
-                    name: '💡 Recordatorio',
-                    value: 'Únete al canal de voz **corabastos** para presentar tu tema.',
+                    name: '📍 Ubicación',
+                    value: 'Únanse al canal de voz **corabastos** para participar',
                     inline: false,
                 });
 
-                await user.send({ embeds: [embed] });
-                console.log(`Sent DM notification to user ${user.username} for turno ${turno}`);
-            } catch (error) {
-                console.error(`Failed to send DM to user ${item.user_id}:`, error);
-                // Continue with other notifications even if one fails
-            }
-        }
-    }
-
-    // Utility methods
-    private getCurrentWeekRange(): { weekStart: Date; weekEnd: Date } {
-        const now = dayjs().tz('America/Bogota');
-
-        // Corabastos week runs from Saturday 00:01 to Friday 23:59
-        // This ensures Saturday midnight cron job creates sessions for the new week
-        let weekStart: dayjs.Dayjs;
-        let weekEnd: dayjs.Dayjs;
-
-        // If today is Saturday, we're starting a new corabastos week
-        if (now.day() === 6) {
-            // Saturday
-            weekStart = now.hour(0).minute(1).second(0).millisecond(0);
-            weekEnd = now.add(6, 'day').hour(23).minute(59).second(59).millisecond(999); // Next Friday
-        } else {
-            // Find the most recent Saturday (start of current corabastos week)
-            const daysSinceSaturday = (now.day() + 1) % 7; // Days since last Saturday
-            weekStart = now
-                .subtract(daysSinceSaturday, 'day')
-                .hour(0)
-                .minute(1)
-                .second(0)
-                .millisecond(0);
-            weekEnd = weekStart.add(6, 'day').hour(23).minute(59).second(59).millisecond(999); // Following Friday
-        }
-
-        return {
-            weekStart: weekStart.utc().toDate(),
-            weekEnd: weekEnd.utc().toDate(),
-        };
-    }
-
-    private getNextFridayAtNoon(): Date {
-        const now = dayjs().tz('America/Bogota');
-        const currentWeekFriday = now
-            .startOf('week')
-            .add(5, 'day')
-            .hour(CORABASTOS_FRIDAY_HOUR)
-            .minute(0)
-            .second(0)
-            .millisecond(0);
-
-        // If current week's Friday hasn't passed yet, use it
-        if (currentWeekFriday.isAfter(now)) {
-            return currentWeekFriday.utc().toDate();
-        }
-
-        // Otherwise, use next week's Friday
-        return currentWeekFriday.add(1, 'week').utc().toDate();
-    }
-
-    // Automatic weekly session creation
-    public async createWeeklySessionIfNeeded(client: any): Promise<void> {
-        try {
-            console.log('Checking if weekly corabastos session needs to be created...');
-
-            // Check if there's already a session for the current week
-            const existingSession = await this.getCurrentWeekSession();
-            if (existingSession) {
-                console.log(
-                    `Weekly session already exists for current week: ${existingSession.id}`
+                yield* discordCall('channel.send', () =>
+                    generalChannel.send({ content: '@everyone', embeds: [embed] })
                 );
-                return;
-            }
+            });
 
-            // Create the bot user for session creation
-            const botUser = client.user;
-            if (!botUser) {
-                console.warn('Bot user not available for session creation');
-                return;
-            }
+            const sendTurnoDMNotifications = Effect.fn(
+                'CorabastosManager.sendTurnoDMNotifications'
+            )(function* (turno: number, items: ReadonlyArray<CorabastosAgendaRow>) {
+                const timeStr = turno === 0 ? '12:00 PM' : `${turno}:00 PM`;
 
-            // Create new weekly session
-            const { weekStart, weekEnd } = this.getCurrentWeekRange();
-            const scheduledTime = this.getNextFridayAtNoon();
+                for (const item of items) {
+                    yield* Effect.gen(function* () {
+                        const user = yield* discordCall('users.fetch', () =>
+                            client.users.fetch(item.user_id)
+                        );
 
-            console.log(`Creating new weekly corabastos session:`);
-            console.log(`- Week: ${weekStart.toISOString()} to ${weekEnd.toISOString()}`);
-            console.log(`- Scheduled: ${scheduledTime.toISOString()}`);
+                        const embed = new EmbedBuilder()
+                            .setTitle(`⏰ Recordatorio de Corabastos - Turno ${turno}`)
+                            .setDescription(
+                                `¡Es hora de tu tema en el corabastos!\n\n` +
+                                    `**Tu tema:** ${item.topic}\n` +
+                                    `**Turno:** ${turno} (${timeStr})\n` +
+                                    `**Ubicación:** Canal de voz corabastos`
+                            )
+                            .setColor(0x00ff00)
+                            .setTimestamp();
 
-            const sessionData = await this.repository.createSession(
-                weekStart,
-                weekEnd,
-                'regular',
-                scheduledTime,
-                botUser
-            );
+                        if (item.description) {
+                            embed.addFields({
+                                name: '📋 Descripción',
+                                value: item.description,
+                                inline: false,
+                            });
+                        }
 
-            const session = this.mapSessionDataToSession(sessionData);
+                        embed.addFields({
+                            name: '💡 Recordatorio',
+                            value: 'Únete al canal de voz **corabastos** para presentar tu tema.',
+                            inline: false,
+                        });
 
-            console.log(`✅ Created weekly corabastos session: ${session.id}`);
-
-            // Optionally announce the new session in general channel
-            const guild = client.guilds.cache.first();
-            if (guild) {
-                const generalChannel = await this.findGeneralChannel(guild);
-                if (generalChannel) {
-                    const scheduledTimeFormatted = dayjs(scheduledTime)
-                        .tz('America/Bogota')
-                        .format('dddd, MMM DD [at] h:mm A');
-
-                    await generalChannel.send({
-                        content:
-                            `📅 **Nueva semana, nuevo Corabastos!**\n\n` +
-                            `Se ha creado automáticamente la sesión de corabastos para esta semana.\n` +
-                            `📍 **Programado para:** ${scheduledTimeFormatted}\n\n` +
-                            `¡Usa \`/corabastos-agenda agregar\` para añadir temas a la agenda!`,
-                    });
-
-                    console.log('Posted weekly session announcement to general channel');
+                        yield* discordCall('user.send', () => user.send({ embeds: [embed] }));
+                        yield* Effect.logInfo(
+                            `Sent DM notification to user ${user.username} for turno ${turno}`
+                        );
+                    }).pipe(
+                        Effect.catchCause(cause =>
+                            Effect.logError(`Failed to send DM to user ${item.user_id}:`, cause)
+                        )
+                    );
                 }
-            }
-        } catch (error) {
-            console.error('Error creating weekly corabastos session:', error);
-        }
-    }
+            });
 
-    // Manual trigger for testing - can be called via admin command if needed
-    public async forceCreateWeeklySession(client: any): Promise<CorabastosSession | null> {
-        try {
-            console.log('Force creating weekly corabastos session...');
+            const processActiveSessionTurnos = Effect.fn(
+                'CorabastosManager.processActiveSessionTurnos'
+            )(function* () {
+                const session = yield* getCurrentWeekSession();
+                if (!session || session.status !== 'scheduled') {
+                    yield* Effect.logDebug(
+                        `processActiveSessionTurnos: no scheduled session found or session status is ${session?.status}`
+                    );
+                    return;
+                }
 
-            const botUser = client.user;
-            if (!botUser) {
-                console.warn('Bot user not available for session creation');
-                return null;
-            }
+                const now = dayjs().tz('America/Bogota');
+                const currentHour = now.hour();
+                const currentMinute = now.minute();
 
-            const { weekStart, weekEnd } = this.getCurrentWeekRange();
-            const scheduledTime = this.getNextFridayAtNoon();
+                // Corabastos sessions only happen on Fridays (day 5)
+                if (now.day() !== 5) {
+                    yield* Effect.logDebug(
+                        `processActiveSessionTurnos: not Friday (current day: ${now.day()}), skipping`
+                    );
+                    return;
+                }
 
-            const sessionData = await this.repository.createSession(
-                weekStart,
-                weekEnd,
-                'regular',
-                scheduledTime,
-                botUser
+                // Pre-session agenda notification at 11:50 AM
+                if (currentHour === 11 && currentMinute === 50) {
+                    yield* Effect.logInfo(
+                        'processActiveSessionTurnos: pre-session notification time (11:50 AM)'
+                    );
+                    yield* sendPreSessionAgendaNotification(session);
+                    return;
+                }
+
+                if (currentMinute !== 0) {
+                    yield* Effect.logDebug(
+                        `processActiveSessionTurnos: not at minute 0 (current minute: ${currentMinute}), skipping`
+                    );
+                    return;
+                }
+
+                if (currentHour < 12 || currentHour > 22) {
+                    yield* Effect.logDebug(
+                        `processActiveSessionTurnos: not in valid turno time (current hour: ${currentHour}), skipping`
+                    );
+                    return;
+                }
+
+                const currentTurno = currentHour - 12;
+                yield* Effect.logInfo(
+                    `processActiveSessionTurnos: processing turno ${currentTurno} at ${currentHour}:${currentMinute}`
+                );
+
+                const agendaRows = yield* repository.getSessionAgenda(session.id);
+                const currentTurnoItems = agendaRows.filter(
+                    item => item.turno === currentTurno && item.status === 'confirmed'
+                );
+
+                if (currentTurnoItems.length === 0) {
+                    yield* Effect.logDebug(
+                        `processActiveSessionTurnos: no confirmed agenda items for turno ${currentTurno}, skipping`
+                    );
+                    return;
+                }
+
+                const today = now.startOf('day').toDate();
+                const alreadyNotified = yield* repository.hasNotificationBeenSent(
+                    session.id,
+                    currentTurno,
+                    today
+                );
+                if (alreadyNotified) {
+                    yield* Effect.logDebug(
+                        `processActiveSessionTurnos: notification already sent for turno ${currentTurno} today`
+                    );
+                    return;
+                }
+
+                yield* sendTurnoChannelNotification(currentTurno, currentTurnoItems);
+                yield* sendTurnoDMNotifications(currentTurno, currentTurnoItems);
+                yield* repository.markNotificationSent(session.id, currentTurno, today);
+
+                yield* Effect.logInfo(
+                    `Sent turno ${currentTurno} notifications for ${currentTurnoItems.length} agenda items`
+                );
+            });
+
+            // Automatic weekly session creation
+            const createWeeklySessionIfNeeded = Effect.fn(
+                'CorabastosManager.createWeeklySessionIfNeeded'
+            )(function* () {
+                yield* Effect.logInfo(
+                    'Checking if weekly corabastos session needs to be created...'
+                );
+
+                const existingSession = yield* getCurrentWeekSession();
+                if (existingSession) {
+                    yield* Effect.logInfo(
+                        `Weekly session already exists for current week: ${existingSession.id}`
+                    );
+                    return;
+                }
+
+                const { weekStart, weekEnd } = getCurrentWeekRange();
+                const scheduledTime = getNextFridayAtNoon();
+
+                yield* Effect.logInfo(
+                    `Creating new weekly corabastos session: ${weekStart.toISOString()} to ${weekEnd.toISOString()}, scheduled ${scheduledTime.toISOString()}`
+                );
+
+                const sessionRow = yield* repository.createSession(
+                    weekStart,
+                    weekEnd,
+                    'regular',
+                    scheduledTime,
+                    client.user
+                );
+                const session = mapSessionRowToSession(sessionRow);
+
+                yield* Effect.logInfo(`Created weekly corabastos session: ${session.id}`);
+
+                const guild = client.guilds.cache.first();
+                if (guild) {
+                    const generalChannel = findGeneralChannelIn(guild);
+                    if (generalChannel) {
+                        const scheduledTimeFormatted = dayjs(scheduledTime)
+                            .tz('America/Bogota')
+                            .format('dddd, MMM DD [at] h:mm A');
+
+                        yield* discordCall('channel.send', () =>
+                            generalChannel.send({
+                                content:
+                                    `📅 **Nueva semana, nuevo Corabastos!**\n\n` +
+                                    `Se ha creado automáticamente la sesión de corabastos para esta semana.\n` +
+                                    `📍 **Programado para:** ${scheduledTimeFormatted}\n\n` +
+                                    `¡Usa \`/corabastos-agenda agregar\` para añadir temas a la agenda!`,
+                            })
+                        );
+
+                        yield* Effect.logInfo(
+                            'Posted weekly session announcement to general channel'
+                        );
+                    }
+                }
+            });
+
+            const forceCreateWeeklySession = Effect.fn(
+                'CorabastosManager.forceCreateWeeklySession'
+            )(function* () {
+                yield* Effect.logInfo('Force creating weekly corabastos session...');
+
+                const { weekStart, weekEnd } = getCurrentWeekRange();
+                const sessionRow = yield* repository.createSession(
+                    weekStart,
+                    weekEnd,
+                    'regular',
+                    getNextFridayAtNoon(),
+                    client.user
+                );
+
+                const session = mapSessionRowToSession(sessionRow);
+                yield* Effect.logInfo(`Force created weekly corabastos session: ${session.id}`);
+                return session;
+            });
+
+            // Cleanup
+            const cleanupExpiredRequests = Effect.fn('CorabastosManager.cleanupExpiredRequests')(
+                function* () {
+                    return yield* repository.cleanupExpiredEmergencyRequests();
+                }
             );
 
-            const session = this.mapSessionDataToSession(sessionData);
-            console.log(`✅ Force created weekly corabastos session: ${session.id}`);
+            const cleanupOldNotifications = Effect.fn('CorabastosManager.cleanupOldNotifications')(
+                function* (daysOld: number = 7) {
+                    return yield* repository.cleanupOldNotifications(daysOld);
+                }
+            );
 
-            return session;
-        } catch (error) {
-            console.error('Error force creating weekly corabastos session:', error);
-            return null;
-        }
+            const cleanupOldSessions = Effect.fn('CorabastosManager.cleanupOldSessions')(function* (
+                daysOld: number = 90
+            ) {
+                return yield* repository.cleanupOldSessions(daysOld);
+            });
+
+            return {
+                getCurrentWeekSession,
+                getOrCreateCurrentWeekSession,
+                createEmergencySession,
+                addAgendaItem,
+                confirmAgendaItem,
+                cancelAgendaItem,
+                getSessionAgenda,
+                getCurrentWeekAgenda,
+                createEmergencyRequest,
+                updateEmergencyRequestMessage,
+                addEmergencyConfirmation,
+                getEmergencyRequest,
+                checkEmergencyRequestApproval,
+                approveEmergencyRequest,
+                rejectEmergencyRequest,
+                getPendingEmergencyRequests,
+                findCorabastosVoiceChannel,
+                findGeneralChannel,
+                getStats,
+                processActiveSessionTurnos,
+                sendPreSessionAgendaNotification,
+                createWeeklySessionIfNeeded,
+                forceCreateWeeklySession,
+                cleanupExpiredRequests,
+                cleanupOldNotifications,
+                cleanupOldSessions,
+            } as const;
+        }),
     }
+) {}
 
-    // Mapping functions
-    private mapSessionDataToSession(data: CorabastosSessionData): CorabastosSession {
-        return {
-            id: data.id,
-            weekStart: data.week_start,
-            weekEnd: data.week_end,
-            scheduledTime: data.scheduled_time,
-            status: data.status,
-            type: data.type,
-            channelId: data.channel_id,
-            announcementMessageId: data.announcement_message_id,
-            announcementChannelId: data.announcement_channel_id,
-            createdBy: { id: data.created_by_id } as User, // Minimal user object
-            createdAt: data.created_at,
-            updatedAt: data.updated_at,
-        };
-    }
-
-    private async mapAgendaDataToItem(data: CorabastosAgendaData): Promise<CorabastosAgendaItem> {
-        // Get user data from database to properly populate User object
-        const userData = await this.repository.getUserData(data.user_id);
-
-        // Create User object with proper data or fallback to minimal
-        const user = userData
-            ? ({
-                  id: userData.id,
-                  username: userData.username,
-                  discriminator: userData.discriminator,
-                  displayName: userData.username, // Use username as displayName fallback
-                  displayAvatarURL: () => userData.avatar_url,
-              } as User)
-            : ({
-                  id: data.user_id,
-                  username: 'Unknown User',
-                  displayName: 'Unknown User',
-              } as User);
-
-        return {
-            id: data.id,
-            sessionId: data.session_id,
-            user: user,
-            turno: data.turno,
-            topic: data.topic,
-            description: data.description,
-            status: data.status,
-            confirmationMessageId: data.confirmation_message_id,
-            orderIndex: data.order_index,
-            createdAt: data.created_at,
-            updatedAt: data.updated_at,
-        };
-    }
-
-    private mapEmergencyRequestDataToRequest(
-        data: CorabastosEmergencyRequestData
-    ): CorabastosEmergencyRequest {
-        return {
-            id: data.id,
-            requestedBy: { id: data.requested_by_id } as User, // Minimal user object
-            reason: data.reason,
-            paciente: { id: data.paciente_id } as User, // Minimal user object
-            status: data.status,
-            confirmationMessageId: data.confirmation_message_id,
-            confirmationsNeeded: data.confirmations_needed,
-            confirmationsReceived: data.confirmations_received,
-            expiresAt: data.expires_at,
-            approvedAt: data.approved_at,
-            sessionId: data.session_id,
-            createdAt: data.created_at,
-            updatedAt: data.updated_at,
-        };
-    }
-
-    // Cleanup methods
-    public async cleanupExpiredRequests(): Promise<number> {
-        return await this.repository.cleanupExpiredEmergencyRequests();
-    }
-
-    public async cleanupOldNotifications(daysOld: number = 7): Promise<number> {
-        return await this.repository.cleanupOldNotifications(daysOld);
-    }
-
-    public async cleanupOldSessions(daysOld: number = 90): Promise<number> {
-        return await this.repository.cleanupOldSessions(daysOld);
-    }
-}
+export const CorabastosManagerLive = Layer.effect(CorabastosManager)(CorabastosManager.make);

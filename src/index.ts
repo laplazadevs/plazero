@@ -1,11 +1,13 @@
-import { CronJob } from 'cron';
+import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
+import * as NodeServices from '@effect/platform-node/NodeServices';
 import dayjs from 'dayjs';
 import isBetween from 'dayjs/plugin/isBetween.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
-import { Client, Events, GatewayIntentBits, Message } from 'discord.js';
+import { Events, Interaction, Message, PartialMessage } from 'discord.js';
+import { Effect, FiberSet, Layer, Option } from 'effect';
 
-// Import our modular services
+import { DotEnvConfigProviderLive } from './config/AppConfigProvider.js';
 import {
     CANCEL_VOTE_COMMAND,
     CORABASTOS_AGENDA_COMMAND,
@@ -16,9 +18,11 @@ import {
     MEME_CONTEST_COMMAND,
     MEME_OF_THE_YEAR_COMMAND,
     MEME_STATS_COMMAND,
-    VOTE_DURATION_MS,
     VOTE_TIMEOUT_COMMAND,
 } from './config/constants.js';
+import { MigrationsBoot, MigrationsLive } from './db/Migrations.js';
+import { PgLive } from './db/PgLive.js';
+import { discordCall, DiscordClient, DiscordClientLive } from './discord/DiscordClient.js';
 import {
     handleCorabastosAgendaCommand,
     handleCorabastosEmergencyCommand,
@@ -39,19 +43,20 @@ import {
 } from './handlers/meme-commands.js';
 import { handleMemeButtonInteraction } from './handlers/meme-interactions.js';
 import { handleCancelVoteCommand, handleVoteTimeoutCommand } from './handlers/vote-commands.js';
-import { completeVote, setDiscordClientForCompletion } from './handlers/vote-completion.js';
 import { handleVoteReactionAdd, handleVoteReactionRemove } from './handlers/vote-reactions.js';
-import { setDiscordClient, updateVoteMessage } from './handlers/vote-updates.js';
 import { handleMemberJoin } from './handlers/welcome-handler.js';
 import { handleWelcomeButtonInteraction } from './handlers/welcome-interactions.js';
 import { handleWelcomeMessage } from './handlers/welcome-messages.js';
-import { CorabastosManager } from './services/corabastos-manager.js';
-import { DatabaseService } from './services/database-service.js';
-import { MemeManager } from './services/meme-manager.js';
-import { VoteManager } from './services/vote-manager.js';
-import { WelcomeManager } from './services/welcome-manager.js';
-
-// Import constants
+import { ScheduledJobsLive } from './jobs/scheduled-jobs.js';
+import { CorabastosRepositoryLive } from './repositories/corabastos-repository.js';
+import { MemeRepositoryLive } from './repositories/meme-repository.js';
+import { UserRepositoryLive } from './repositories/user-repository.js';
+import { VoteRepositoryLive } from './repositories/vote-repository.js';
+import { WelcomeRepositoryLive } from './repositories/welcome-repository.js';
+import { CorabastosManager, CorabastosManagerLive } from './services/corabastos-manager.js';
+import { MemeManager, MemeManagerLive } from './services/meme-manager.js';
+import { VoteManager, VoteManagerLive } from './services/vote-manager.js';
+import { WelcomeManager, WelcomeManagerLive } from './services/welcome-manager.js';
 
 // Setup dayjs
 dayjs.extend(isBetween);
@@ -59,285 +64,227 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 dayjs.tz.setDefault('America/Bogota');
 
-// Initialize Discord client
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMessageReactions,
-        GatewayIntentBits.GuildMembers,
-    ],
+// ---------------------------------------------------------------------------
+// Layer composition
+// ---------------------------------------------------------------------------
+
+const RepositoriesLive = Layer.mergeAll(
+    VoteRepositoryLive,
+    WelcomeRepositoryLive,
+    MemeRepositoryLive,
+    CorabastosRepositoryLive
+).pipe(Layer.provideMerge(UserRepositoryLive));
+
+const ManagersLive = Layer.mergeAll(
+    VoteManagerLive,
+    WelcomeManagerLive,
+    MemeManagerLive,
+    CorabastosManagerLive
+);
+
+// The Discord client only logs in after pending migrations have been applied,
+// mirroring the old initializeBot() sequence.
+const DiscordAfterMigrations = DiscordClientLive.pipe(Layer.provide(MigrationsBoot));
+
+const AppLive = ScheduledJobsLive.pipe(
+    Layer.provideMerge(ManagersLive),
+    Layer.provideMerge(RepositoriesLive),
+    Layer.provideMerge(DiscordAfterMigrations),
+    Layer.provideMerge(MigrationsLive),
+    Layer.provideMerge(PgLive),
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provide(DotEnvConfigProviderLive)
+);
+
+// Services the gateway event handlers can reach.
+type HandlerContext =
+    | VoteManager
+    | WelcomeManager
+    | MemeManager
+    | CorabastosManager
+    | DiscordClient;
+
+// ---------------------------------------------------------------------------
+// Gateway event handling
+// ---------------------------------------------------------------------------
+
+const dispatchInteraction = Effect.fn('dispatchInteraction')(function* (interaction: Interaction) {
+    if (interaction.isChatInputCommand()) {
+        switch (interaction.commandName) {
+            case MEME_OF_THE_YEAR_COMMAND:
+                yield* handleMemeOfTheYearCommand(interaction);
+                break;
+            case MEME_STATS_COMMAND:
+                yield* handleMemeStatsCommand(interaction);
+                break;
+            case MEME_CONTEST_COMMAND:
+                yield* handleMemeContestCommand(interaction);
+                break;
+            case MEME_COMPLETE_CONTEST_COMMAND:
+                yield* handleMemeCompleteContestCommand(interaction);
+                break;
+            case VOTE_TIMEOUT_COMMAND:
+                yield* handleVoteTimeoutCommand(interaction);
+                break;
+            case CANCEL_VOTE_COMMAND:
+                yield* handleCancelVoteCommand(interaction);
+                break;
+            case CORABASTOS_AGENDA_COMMAND:
+                yield* handleCorabastosAgendaCommand(interaction);
+                break;
+            case CORABASTOS_EMERGENCY_COMMAND:
+                yield* handleCorabastosEmergencyCommand(interaction);
+                break;
+            case CORABASTOS_STATUS_COMMAND:
+                yield* handleCorabastosStatusCommand(interaction);
+                break;
+            case CORABASTOS_CREATE_SESSION_COMMAND:
+                yield* handleCreateCorabastosSession(interaction);
+                break;
+        }
+    } else if (interaction.isButton()) {
+        if (interaction.customId.startsWith('welcome_')) {
+            yield* handleWelcomeButtonInteraction(interaction);
+        } else if (interaction.customId.startsWith('meme_contest_')) {
+            yield* handleMemeButtonInteraction(interaction);
+        } else if (interaction.customId.startsWith('corabastos_')) {
+            yield* handleCorabastosButtonInteraction(interaction);
+        }
+    }
 });
 
-// Initialize database and managers
-const databaseService = DatabaseService.getInstance();
-const voteManager = new VoteManager();
-const welcomeManager = new WelcomeManager();
-const memeManager = new MemeManager();
-const corabastosManager = new CorabastosManager();
+// Wraps interaction handling with the old top-level error reply behavior.
+const safeInteraction = (interaction: Interaction): Effect.Effect<void, never, HandlerContext> =>
+    dispatchInteraction(interaction).pipe(
+        Effect.catchCause(cause =>
+            Effect.gen(function* () {
+                yield* Effect.logError('Error processing interaction:', cause);
 
-// Set up client reference for vote updates and completion
-setDiscordClient(client);
-setDiscordClientForCompletion(client);
-
-// Set up periodic vote completion check and embed updates (every 30 seconds)
-setInterval(async () => {
-    try {
-        const activeVotes = await voteManager.getAllActiveVotes();
-        const now = new Date();
-
-        for (const vote of activeVotes) {
-            const timeElapsed = now.getTime() - vote.startTime.getTime();
-            if (timeElapsed >= VOTE_DURATION_MS) {
-                console.log(`Found expired vote ${vote.id}, completing it`);
-                await completeVote(vote.id, voteManager);
-            } else {
-                // Update the embed to show correct time remaining
-                await updateVoteMessage(vote);
-            }
-        }
-    } catch (error) {
-        console.error('Error in periodic vote completion check:', error);
-    }
-}, 30000); // Check every 30 seconds
-
-// Initialize database and start bot
-async function initializeBot(): Promise<void> {
-    try {
-        // Test database connection
-        const dbConnected = await databaseService.testConnection();
-        if (!dbConnected) {
-            console.error(
-                'Failed to connect to database. Please check your database configuration.'
-            );
-            process.exit(1);
-        }
-
-        // Initialize database schema
-        await databaseService.initializeSchema();
-        await databaseService.createCleanupFunctions();
-
-        // Start Discord bot
-        await client.login(process.env.DISCORD_BOT_TOKEN);
-        console.log('Bot logged in!');
-    } catch (error) {
-        console.error('Failed to initialize bot:', error);
-        process.exit(1);
-    }
-}
-
-initializeBot();
-
-client.once('ready', () => {
-    console.log('Bot is ready!');
-
-    // Note: Automatic weekly contest creation/processing is handled by the contest system
-
-    // Schedule contest completion check every hour
-    const contestCompletionJob = new CronJob(
-        '0 * * * *', // Every hour at minute 0
-        async () => {
-            console.log('Checking for expired contests...');
-            try {
-                await memeManager.processExpiredContests(client);
-            } catch (error) {
-                console.error('Error processing expired contests:', error);
-            }
-        },
-        null, // onComplete
-        true, // start
-        'America/Bogota' // timeZone
-    );
-    contestCompletionJob.start();
-
-    // Schedule turno notifications check every minute
-    const turnoNotificationJob = new CronJob(
-        '* * * * *', // Every minute
-        async () => {
-            try {
-                await corabastosManager.processActiveSessionTurnos(client);
-            } catch (error) {
-                console.error('Error processing turno notifications:', error);
-            }
-        },
-        null, // onComplete
-        true, // start
-        'America/Bogota' // timeZone
-    );
-    turnoNotificationJob.start();
-
-    // Schedule weekly corabastos session creation at Saturday midnight (start of new week)
-    const weeklySessionCreationJob = new CronJob(
-        '0 0 * * 6', // At 00:00 on Saturday (start of new week)
-        async () => {
-            console.log('Creating weekly corabastos session...');
-            try {
-                await corabastosManager.createWeeklySessionIfNeeded(client);
-            } catch (error) {
-                console.error('Error creating weekly corabastos session:', error);
-            }
-        },
-        null, // onComplete
-        true, // start
-        'America/Bogota' // timeZone
-    );
-    weeklySessionCreationJob.start();
-
-    // Run database cleanup every hour
-    setInterval(async () => {
-        try {
-            await databaseService.runCleanup();
-            console.log('Database cleanup completed');
-        } catch (error) {
-            console.error('Error during database cleanup:', error);
-        }
-    }, 60 * 60 * 1000); // 1 hour
-
-    // Run corabastos cleanup every 30 minutes
-    setInterval(async () => {
-        try {
-            const expiredRequests = await corabastosManager.cleanupExpiredRequests();
-            if (expiredRequests > 0) {
-                console.log(`Cleaned up ${expiredRequests} expired emergency requests`);
-            }
-
-            // Also cleanup old turno notifications (older than 7 days)
-            const cleanedNotifications = await corabastosManager.cleanupOldNotifications();
-            if (cleanedNotifications > 0) {
-                console.log(`Cleaned up ${cleanedNotifications} old turno notifications`);
-            }
-        } catch (error) {
-            console.error('Error during corabastos cleanup:', error);
-        }
-    }, 30 * 60 * 1000); // 30 minutes
-});
-
-// Handle interactions (slash commands and button interactions)
-client.on(Events.InteractionCreate, async interaction => {
-    try {
-        if (interaction.isChatInputCommand()) {
-            if (interaction.commandName === MEME_OF_THE_YEAR_COMMAND) {
-                await handleMemeOfTheYearCommand(interaction, memeManager);
-            } else if (interaction.commandName === MEME_STATS_COMMAND) {
-                await handleMemeStatsCommand(interaction, memeManager);
-            } else if (interaction.commandName === MEME_CONTEST_COMMAND) {
-                await handleMemeContestCommand(interaction, memeManager);
-            } else if (interaction.commandName === MEME_COMPLETE_CONTEST_COMMAND) {
-                await handleMemeCompleteContestCommand(interaction, memeManager);
-            } else if (interaction.commandName === VOTE_TIMEOUT_COMMAND) {
-                await handleVoteTimeoutCommand(interaction, voteManager);
-            } else if (interaction.commandName === CANCEL_VOTE_COMMAND) {
-                await handleCancelVoteCommand(interaction, voteManager);
-            } else if (interaction.commandName === CORABASTOS_AGENDA_COMMAND) {
-                await handleCorabastosAgendaCommand(interaction, corabastosManager);
-            } else if (interaction.commandName === CORABASTOS_EMERGENCY_COMMAND) {
-                await handleCorabastosEmergencyCommand(interaction, corabastosManager);
-            } else if (interaction.commandName === CORABASTOS_STATUS_COMMAND) {
-                await handleCorabastosStatusCommand(interaction, corabastosManager);
-            } else if (interaction.commandName === CORABASTOS_CREATE_SESSION_COMMAND) {
-                await handleCreateCorabastosSession(interaction, corabastosManager);
-            }
-        } else if (interaction.isButton()) {
-            if (interaction.customId.startsWith('welcome_')) {
-                await handleWelcomeButtonInteraction(interaction, welcomeManager);
-            } else if (interaction.customId.startsWith('meme_contest_')) {
-                await handleMemeButtonInteraction(interaction, memeManager);
-            } else if (interaction.customId.startsWith('corabastos_')) {
-                await handleCorabastosButtonInteraction(interaction, corabastosManager);
-            }
-        }
-    } catch (error) {
-        console.error('Error processing interaction:', error);
-        const errorMessage = 'There was an error processing your interaction.';
-
-        try {
-            if (interaction.isRepliable()) {
-                if (interaction.deferred) {
-                    await interaction.editReply(errorMessage);
-                } else if (!interaction.replied) {
-                    await interaction.reply({ content: errorMessage, ephemeral: true });
+                const errorMessage = 'There was an error processing your interaction.';
+                if (interaction.isRepliable()) {
+                    if (interaction.deferred) {
+                        yield* discordCall('interaction.editReply', () =>
+                            interaction.editReply(errorMessage)
+                        ).pipe(
+                            Effect.catchCause(replyCause =>
+                                Effect.logError('Could not send error reply:', replyCause)
+                            )
+                        );
+                    } else if (!interaction.replied) {
+                        yield* discordCall('interaction.reply', () =>
+                            interaction.reply({ content: errorMessage, ephemeral: true })
+                        ).pipe(
+                            Effect.catchCause(replyCause =>
+                                Effect.logError('Could not send error reply:', replyCause)
+                            )
+                        );
+                    }
                 }
-            }
-        } catch (replyError) {
-            // If we can't even send an error message, just log it
-            console.error('Could not send error reply:', replyError);
-        }
-    }
-});
+            })
+        )
+    );
 
-// Handle message reactions for voting and corabastos
-client.on(Events.MessageReactionAdd, async (reaction, user) => {
-    await handleVoteReactionAdd(reaction, user, voteManager);
-    await handleCorabastosReactionAdd(reaction, user, corabastosManager);
-});
+const logStatsOnShutdown = Effect.gen(function* () {
+    yield* Effect.logInfo('Shutting down gracefully...');
 
-client.on(Events.MessageReactionRemove, async (reaction, user) => {
-    await handleVoteReactionRemove(reaction, user, voteManager);
-    await handleCorabastosReactionRemove(reaction, user, corabastosManager);
-});
+    const voteManager = yield* VoteManager;
+    const welcomeManager = yield* WelcomeManager;
+    const memeManager = yield* MemeManager;
+    const corabastosManager = yield* CorabastosManager;
 
-// Handle new member joins
-client.on(Events.GuildMemberAdd, async member => {
-    await handleMemberJoin(member, welcomeManager);
-});
-
-// Handle member departures
-client.on(Events.GuildMemberRemove, async member => {
-    await handleMemberLeave(member);
-});
-
-// Handle messages for welcome information collection
-client.on(Events.MessageCreate, async message => {
-    await handleWelcomeMessage(message, welcomeManager);
-});
-
-// Handle message edits for welcome information collection
-client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
-    let fullMessage: Message;
-
-    if (newMessage.partial) {
-        try {
-            fullMessage = await newMessage.fetch();
-        } catch (error) {
-            console.error('Failed to fetch partial message:', error);
-            return;
-        }
-    } else {
-        fullMessage = newMessage;
-    }
-
-    // Only handle full messages with content
-    if (!fullMessage.content) return;
-
-    await handleWelcomeMessage(fullMessage, welcomeManager);
-});
-
-// Graceful shutdown
-process.on('SIGINT', async () => {
-    console.log('Shutting down gracefully...');
-
-    try {
-        const [voteStats, welcomeStats, memeStats, corabastosStats] = await Promise.all([
+    const [voteStats, welcomeStats, memeStats, corabastosStats] = yield* Effect.all(
+        [
             voteManager.getStats(),
             welcomeManager.getStats(),
             memeManager.getStats(),
             corabastosManager.getStats(),
-        ]);
+        ],
+        { concurrency: 4 }
+    );
 
-        console.log('Vote Manager Stats:', voteStats);
-        console.log('Welcome Manager Stats:', welcomeStats);
-        console.log('Meme Manager Stats:', memeStats);
-        console.log('Corabastos Manager Stats:', corabastosStats);
-
-        await databaseService.close();
-        client.destroy();
-        process.exit(0);
-    } catch (error) {
-        console.error('Error during shutdown:', error);
-        process.exit(1);
-    }
+    yield* Effect.logInfo('Vote Manager Stats:', voteStats);
+    yield* Effect.logInfo('Welcome Manager Stats:', welcomeStats);
+    yield* Effect.logInfo('Meme Manager Stats:', memeStats);
+    yield* Effect.logInfo('Corabastos Manager Stats:', corabastosStats);
 });
 
-// Export for potential testing
-export { client, voteManager, welcomeManager, memeManager, corabastosManager };
+const handleUpdatedMessage = Effect.fn('handleUpdatedMessage')(function* (
+    newMessage: Message | PartialMessage
+) {
+    const fullMessage = newMessage.partial
+        ? yield* discordCall('message.fetch', () => newMessage.fetch()).pipe(
+              Effect.tapCause(cause => Effect.logError('Failed to fetch partial message:', cause)),
+              Effect.option
+          )
+        : Option.some(newMessage);
+
+    if (Option.isNone(fullMessage)) return;
+
+    // Only handle full messages with content
+    if (!fullMessage.value.content) return;
+
+    yield* handleWelcomeMessage(fullMessage.value);
+});
+
+const program = Effect.gen(function* () {
+    const client = yield* DiscordClient;
+    const runFork = yield* FiberSet.makeRuntime<HandlerContext>();
+
+    // Handle interactions (slash commands and button interactions)
+    client.on(Events.InteractionCreate, interaction => {
+        runFork(safeInteraction(interaction));
+    });
+
+    // Handle message reactions for voting and corabastos
+    client.on(Events.MessageReactionAdd, (reaction, user) => {
+        runFork(
+            Effect.gen(function* () {
+                yield* handleVoteReactionAdd(reaction, user);
+                yield* handleCorabastosReactionAdd(reaction, user);
+            }).pipe(
+                Effect.catchCause(cause => Effect.logError('Error handling reaction add:', cause))
+            )
+        );
+    });
+
+    client.on(Events.MessageReactionRemove, (reaction, user) => {
+        runFork(
+            Effect.gen(function* () {
+                yield* handleVoteReactionRemove(reaction, user);
+                yield* handleCorabastosReactionRemove(reaction, user);
+            }).pipe(
+                Effect.catchCause(cause =>
+                    Effect.logError('Error handling reaction remove:', cause)
+                )
+            )
+        );
+    });
+
+    // Handle new member joins
+    client.on(Events.GuildMemberAdd, member => {
+        runFork(handleMemberJoin(member));
+    });
+
+    // Handle member departures
+    client.on(Events.GuildMemberRemove, member => {
+        runFork(handleMemberLeave(member));
+    });
+
+    // Handle messages for welcome information collection
+    client.on(Events.MessageCreate, message => {
+        runFork(handleWelcomeMessage(message));
+    });
+
+    // Handle message edits for welcome information collection
+    client.on(Events.MessageUpdate, (_oldMessage, newMessage) => {
+        runFork(handleUpdatedMessage(newMessage));
+    });
+
+    // Print manager statistics when the application shuts down.
+    yield* Effect.addFinalizer(() => logStatsOnShutdown.pipe(Effect.ignore));
+
+    yield* Effect.logInfo('Bot is ready!');
+    yield* Effect.never;
+});
+
+NodeRuntime.runMain(Effect.scoped(program).pipe(Effect.provide(AppLive)));

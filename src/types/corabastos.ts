@@ -1,4 +1,4 @@
-import { User } from 'discord.js';
+import type { PlazeroUser } from './user.js';
 
 export interface CorabastosSession {
     id: string;
@@ -10,7 +10,7 @@ export interface CorabastosSession {
     channelId?: string;
     announcementMessageId?: string;
     announcementChannelId?: string;
-    createdBy: User;
+    createdBy: PlazeroUser;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -18,7 +18,7 @@ export interface CorabastosSession {
 export interface CorabastosAgendaItem {
     id: string;
     sessionId: string;
-    user: User;
+    user: PlazeroUser;
     turno: number; // 0 = 12pm, 1 = 1pm, 2 = 2pm, etc.
     topic: string;
     description?: string;
@@ -31,9 +31,9 @@ export interface CorabastosAgendaItem {
 
 export interface CorabastosEmergencyRequest {
     id: string;
-    requestedBy: User;
+    requestedBy: PlazeroUser;
     reason: string;
-    paciente: User;
+    paciente: PlazeroUser;
     status: 'pending' | 'approved' | 'rejected' | 'cancelled';
     confirmationMessageId?: string;
     confirmationsNeeded: number;
@@ -45,84 +45,6 @@ export interface CorabastosEmergencyRequest {
     updatedAt: Date;
 }
 
-export interface CorabastosEmergencyConfirmation {
-    id: number;
-    requestId: string;
-    user: User;
-    confirmedAt: Date;
-}
-
-export interface CorabastosAttendance {
-    id: number;
-    sessionId: string;
-    user: User;
-    joinedAt: Date;
-    leftAt?: Date;
-    totalDuration?: number; // In minutes
-}
-
-// Database row interfaces for repository layer
-export interface CorabastosSessionData {
-    id: string;
-    week_start: Date;
-    week_end: Date;
-    scheduled_time?: Date;
-    status: 'scheduled' | 'active' | 'completed' | 'cancelled';
-    type: 'regular' | 'emergency';
-    channel_id?: string;
-    announcement_message_id?: string;
-    announcement_channel_id?: string;
-    created_by_id: string;
-    created_at: Date;
-    updated_at: Date;
-}
-
-export interface CorabastosAgendaData {
-    id: string;
-    session_id: string;
-    user_id: string;
-    turno: number;
-    topic: string;
-    description?: string;
-    status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
-    confirmation_message_id?: string;
-    order_index: number;
-    created_at: Date;
-    updated_at: Date;
-}
-
-export interface CorabastosEmergencyRequestData {
-    id: string;
-    requested_by_id: string;
-    reason: string;
-    paciente_id: string;
-    status: 'pending' | 'approved' | 'rejected' | 'cancelled';
-    confirmation_message_id?: string;
-    confirmations_needed: number;
-    confirmations_received: number;
-    expires_at?: Date;
-    approved_at?: Date;
-    session_id?: string;
-    created_at: Date;
-    updated_at: Date;
-}
-
-export interface CorabastosEmergencyConfirmationData {
-    id: number;
-    request_id: string;
-    user_id: string;
-    confirmed_at: Date;
-}
-
-export interface CorabastosAttendanceData {
-    id: number;
-    session_id: string;
-    user_id: string;
-    joined_at: Date;
-    left_at?: Date;
-    total_duration?: number;
-}
-
 // Utility types for commands and interactions
 export interface AgendaAddParams {
     turno: number;
@@ -132,7 +54,7 @@ export interface AgendaAddParams {
 
 export interface EmergencyRequestParams {
     reason: string;
-    paciente: User;
+    paciente: PlazeroUser;
 }
 
 export interface CorabastosStats {
@@ -160,9 +82,9 @@ export const TURNO_LABELS = {
 export type TurnoNumber = keyof typeof TURNO_LABELS;
 
 export function getTurnoLabel(turno: number): string {
-    return TURNO_LABELS[turno as TurnoNumber] || `${12 + turno}:00 PM`;
+    return isValidTurno(turno) ? TURNO_LABELS[turno] : `${12 + turno}:00 PM`;
 }
 
 export function isValidTurno(turno: number): turno is TurnoNumber {
-    return turno >= 0 && turno <= 8;
+    return Number.isInteger(turno) && turno >= 0 && turno <= 8;
 }

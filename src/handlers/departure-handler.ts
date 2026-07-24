@@ -1,44 +1,50 @@
 import { GuildMember, PartialGuildMember, TextChannel } from 'discord.js';
+import { Effect } from 'effect';
 
 import { ADMINISTRATION_CHANNEL_NAME } from '../config/constants.js';
+import { discordCall } from '../discord/DiscordClient.js';
 import { createDepartureEmbed } from '../services/departure-embed.js';
 
-export async function handleMemberLeave(member: GuildMember | PartialGuildMember): Promise<void> {
-    try {
+export const handleMemberLeave = Effect.fn('handleMemberLeave')(function* (
+    member: GuildMember | PartialGuildMember
+) {
+    yield* Effect.gen(function* () {
         // Handle partial member
-        let fullMember = member;
+        let fullMember: GuildMember;
         if (member.partial) {
-            try {
-                fullMember = await member.fetch();
-            } catch (error) {
-                console.error('Failed to fetch full member data for departure:', error);
-                return;
-            }
+            const fetched = yield* discordCall('member.fetch', () => member.fetch()).pipe(
+                Effect.tapCause(cause =>
+                    Effect.logError('Failed to fetch full member data for departure:', cause)
+                ),
+                Effect.option
+            );
+            if (fetched._tag === 'None') return;
+            fullMember = fetched.value;
+        } else {
+            fullMember = member;
         }
 
-        console.log(`Member ${fullMember.user.username} (${fullMember.id}) left the server`);
+        yield* Effect.logInfo(
+            `Member ${fullMember.user.username} (${fullMember.id}) left the server`
+        );
 
-        // Find the administration channel
         const adminChannel = fullMember.guild.channels.cache.find(
-            channel => channel.name === ADMINISTRATION_CHANNEL_NAME && channel.isTextBased()
-        ) as TextChannel;
+            (channel): channel is TextChannel =>
+                channel instanceof TextChannel && channel.name === ADMINISTRATION_CHANNEL_NAME
+        );
 
         if (!adminChannel) {
-            console.error(`Administration channel "${ADMINISTRATION_CHANNEL_NAME}" not found`);
+            yield* Effect.logError(
+                `Administration channel "${ADMINISTRATION_CHANNEL_NAME}" not found`
+            );
             return;
         }
 
-        // Create and send departure embed
-        const embed = createDepartureEmbed(fullMember as GuildMember);
+        const embed = createDepartureEmbed(fullMember);
+        yield* discordCall('channel.send', () => adminChannel.send({ embeds: [embed] }));
 
-        await adminChannel.send({
-            embeds: [embed],
-        });
-
-        console.log(
+        yield* Effect.logInfo(
             `Departure notification sent for user ${fullMember.user.username} (${fullMember.id})`
         );
-    } catch (error) {
-        console.error('Error handling member departure:', error);
-    }
-}
+    }).pipe(Effect.catchCause(cause => Effect.logError('Error handling member departure:', cause)));
+});

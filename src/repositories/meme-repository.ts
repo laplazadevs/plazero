@@ -1,293 +1,255 @@
-import { User } from 'discord.js';
+import type { PlazeroUser } from '../types/user.js';
+import { Context, Effect, Layer, Schema } from 'effect';
+import * as SqlClient from 'effect/unstable/sql/SqlClient';
 
 import { UserRepository } from './user-repository.js';
-import { DatabaseService } from '../services/database-service.js';
+import {
+    CountRow,
+    MemeContestRow,
+    MemeTotalsRow,
+    MemeWinnerRow,
+    TopContributorRow,
+    UserStatsRow,
+} from '../db/schemas.js';
 
-export interface MemeContestData {
-    id: string;
-    type: 'weekly' | 'yearly';
-    start_date: Date;
-    end_date: Date;
-    status: 'active' | 'completed' | 'cancelled';
-    channel_id: string;
-    message_id?: string;
-    created_by_id: string;
-    created_at: Date;
+export interface MemeWinnerInsert {
+    readonly id: string;
+    readonly contest_id: string;
+    readonly message_id: string;
+    readonly author_id: string;
+    readonly reaction_count: number;
+    readonly contest_type: 'meme' | 'bone';
+    readonly rank: number;
+    readonly week_start: Date | null;
+    readonly week_end: Date | null;
+    readonly submitted_at: Date;
 }
 
-export interface MemeWinnerData {
-    id: string;
-    contest_id: string;
-    message_id: string;
-    author_id: string;
-    reaction_count: number;
-    contest_type: 'meme' | 'bone';
-    rank: number;
-    week_start?: Date;
-    week_end?: Date;
-    submitted_at: Date;
-}
+const decodeContestRows = Schema.decodeUnknownEffect(Schema.Array(MemeContestRow));
+const decodeWinnerRows = Schema.decodeUnknownEffect(Schema.Array(MemeWinnerRow));
+const decodeUserStatsRows = Schema.decodeUnknownEffect(Schema.Array(UserStatsRow));
+const decodeTopContributorRows = Schema.decodeUnknownEffect(Schema.Array(TopContributorRow));
+const decodeCountRows = Schema.decodeUnknownEffect(Schema.Array(CountRow));
+const decodeTotalsRows = Schema.decodeUnknownEffect(Schema.Array(MemeTotalsRow));
 
-export interface UserStatsData {
-    user_id: string;
-    total_meme_wins: number;
-    total_bone_wins: number;
-    total_contests_participated: number;
-    updated_at: Date;
-}
+export class MemeRepository extends Context.Service<MemeRepository>()('plazero/MemeRepository', {
+    make: Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const users = yield* UserRepository;
 
-export class MemeRepository {
-    private db: DatabaseService;
-    private userRepo: UserRepository;
+        const createContest = Effect.fn('MemeRepository.createContest')(function* (
+            contestId: string,
+            type: 'weekly' | 'yearly',
+            startDate: Date,
+            endDate: Date,
+            channelId: string,
+            createdBy: PlazeroUser
+        ) {
+            return yield* sql.withTransaction(
+                Effect.gen(function* () {
+                    yield* users.upsertUser(createdBy);
 
-    constructor() {
-        this.db = DatabaseService.getInstance();
-        this.userRepo = new UserRepository();
-    }
-
-    public async createContest(
-        contestId: string,
-        type: 'weekly' | 'yearly',
-        startDate: Date,
-        endDate: Date,
-        channelId: string,
-        createdBy: User
-    ): Promise<MemeContestData> {
-        return await this.db.transaction(async client => {
-            // Ensure user exists in database
-            await this.userRepo.upsertUser(createdBy);
-
-            const query = `
-                INSERT INTO meme_contests (
-                    id, type, start_date, end_date, status, 
-                    channel_id, created_by_id, created_at
-                )
-                VALUES ($1, $2, $3, $4, 'active', $5, $6, NOW())
-                RETURNING *
-            `;
-
-            const result = await client.query(query, [
-                contestId,
-                type,
-                startDate,
-                endDate,
-                channelId,
-                createdBy.id,
-            ]);
-
-            return result.rows[0];
-        });
-    }
-
-    public async getContest(contestId: string): Promise<MemeContestData | null> {
-        const query = 'SELECT * FROM meme_contests WHERE id = $1';
-        const result = await this.db.query(query, [contestId]);
-        return result.rows[0] || null;
-    }
-
-    public async getActiveContests(): Promise<MemeContestData[]> {
-        const query = 'SELECT * FROM meme_contests WHERE status = $1';
-        const result = await this.db.query(query, ['active']);
-        return result.rows;
-    }
-
-    public async updateContestMessageId(contestId: string, messageId: string): Promise<void> {
-        const query = 'UPDATE meme_contests SET message_id = $1 WHERE id = $2';
-        await this.db.query(query, [messageId, contestId]);
-    }
-
-    public async completeContest(contestId: string): Promise<void> {
-        const query = 'UPDATE meme_contests SET status = $1 WHERE id = $2';
-        await this.db.query(query, ['completed', contestId]);
-    }
-
-    public async addMemeWinners(winners: MemeWinnerData[]): Promise<void> {
-        if (winners.length === 0) return;
-
-        console.log(`addMemeWinners: Starting transaction for ${winners.length} winners`);
-        return await this.db.transaction(async client => {
-            console.log(`addMemeWinners: Transaction started successfully`);
-            // Ensure all authors exist in database
-            const authorIds = [...new Set(winners.map(w => w.author_id))];
-            console.log(
-                `addMemeWinners: Ensuring ${authorIds.length} unique authors exist in database`
+                    const rows = yield* sql`
+                        INSERT INTO meme_contests (
+                            id, type, start_date, end_date, status,
+                            channel_id, created_by_id, created_at
+                        )
+                        VALUES (
+                            ${contestId}, ${type}, ${startDate}, ${endDate}, 'active',
+                            ${channelId}, ${createdBy.id}, NOW()
+                        )
+                        RETURNING *
+                    `;
+                    const contests = yield* decodeContestRows(rows);
+                    return contests[0];
+                })
             );
-            for (const authorId of authorIds) {
-                // We'll need to fetch the user from Discord API or pass it in
-                // For now, we'll create a minimal user record
-                await client.query(
-                    `
-                    INSERT INTO users (id, username, updated_at)
-                    VALUES ($1, 'Unknown', NOW())
-                    ON CONFLICT (id) DO NOTHING
-                `,
-                    [authorId]
-                );
-            }
-            console.log(`addMemeWinners: Successfully ensured all authors exist`);
+        });
 
-            // Insert winners
-            console.log(`addMemeWinners: Inserting ${winners.length} winners into database`);
-            for (const winner of winners) {
-                const query = `
-                    INSERT INTO meme_winners (
-                        id, contest_id, message_id, author_id, reaction_count,
-                        contest_type, rank, week_start, week_end, submitted_at
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                    ON CONFLICT (id) DO UPDATE SET
-                        reaction_count = EXCLUDED.reaction_count,
-                        rank = EXCLUDED.rank
+        const getContest = Effect.fn('MemeRepository.getContest')(function* (contestId: string) {
+            const rows = yield* sql`SELECT * FROM meme_contests WHERE id = ${contestId}`;
+            const contests = yield* decodeContestRows(rows);
+            return contests.length > 0 ? contests[0] : null;
+        });
+
+        const getActiveContests = Effect.fn('MemeRepository.getActiveContests')(function* () {
+            const rows = yield* sql`SELECT * FROM meme_contests WHERE status = 'active'`;
+            return yield* decodeContestRows(rows);
+        });
+
+        const updateContestMessageId = Effect.fn('MemeRepository.updateContestMessageId')(
+            function* (contestId: string, messageId: string) {
+                yield* sql`
+                    UPDATE meme_contests SET message_id = ${messageId} WHERE id = ${contestId}
                 `;
-
-                console.log(
-                    `addMemeWinners: Inserting winner ${winner.id} (${winner.contest_type})`
-                );
-                await client.query(query, [
-                    winner.id,
-                    winner.contest_id,
-                    winner.message_id,
-                    winner.author_id,
-                    winner.reaction_count,
-                    winner.contest_type,
-                    winner.rank,
-                    winner.week_start,
-                    winner.week_end,
-                    winner.submitted_at,
-                ]);
             }
-            console.log(`addMemeWinners: Successfully inserted all ${winners.length} winners`);
+        );
 
-            // Update user statistics
-            console.log(`addMemeWinners: Updating user statistics for ${winners.length} winners`);
-            await this.updateUserStats(client, winners);
-            console.log(`addMemeWinners: Successfully updated user statistics`);
-            console.log(`addMemeWinners: Transaction completed successfully`);
-        });
-    }
-
-    private async updateUserStats(client: any, winners: MemeWinnerData[]): Promise<void> {
-        const userStats = new Map<string, { memeWins: number; boneWins: number }>();
-
-        for (const winner of winners) {
-            const stats = userStats.get(winner.author_id) || { memeWins: 0, boneWins: 0 };
-            if (winner.contest_type === 'meme') {
-                stats.memeWins++;
-            } else {
-                stats.boneWins++;
-            }
-            userStats.set(winner.author_id, stats);
-        }
-
-        for (const [userId, stats] of userStats.entries()) {
-            // Ensure user exists before updating stats
-            await client.query(
-                `
-                INSERT INTO users (id, username, updated_at)
-                VALUES ($1, 'Unknown', NOW())
-                ON CONFLICT (id) DO NOTHING
-            `,
-                [userId]
-            );
-
-            const query = `
-                INSERT INTO user_stats (user_id, total_meme_wins, total_bone_wins, updated_at)
-                VALUES ($1, $2, $3, NOW())
-                ON CONFLICT (user_id)
-                DO UPDATE SET
-                    total_meme_wins = user_stats.total_meme_wins + $2,
-                    total_bone_wins = user_stats.total_bone_wins + $3,
-                    updated_at = NOW()
+        const completeContest = Effect.fn('MemeRepository.completeContest')(function* (
+            contestId: string
+        ) {
+            yield* sql`
+                UPDATE meme_contests SET status = 'completed' WHERE id = ${contestId}
             `;
+        });
 
-            await client.query(query, [userId, stats.memeWins, stats.boneWins]);
-        }
-    }
+        const addMemeWinners = Effect.fn('MemeRepository.addMemeWinners')(function* (
+            winners: ReadonlyArray<MemeWinnerInsert>
+        ) {
+            if (winners.length === 0) {
+                return;
+            }
 
-    public async getContestWinners(contestId: string): Promise<MemeWinnerData[]> {
-        const query = `
-            SELECT * FROM meme_winners 
-            WHERE contest_id = $1 
-            ORDER BY contest_type, rank
-        `;
-        const result = await this.db.query(query, [contestId]);
-        return result.rows;
-    }
+            yield* Effect.logDebug(
+                `addMemeWinners: starting transaction for ${winners.length} winners`
+            );
+            yield* sql.withTransaction(
+                Effect.gen(function* () {
+                    const authorIds = [...new Set(winners.map(winner => winner.author_id))];
+                    for (const authorId of authorIds) {
+                        yield* users.ensureUserId(authorId);
+                    }
 
-    public async getUserStats(userId: string): Promise<UserStatsData | null> {
-        const query = 'SELECT * FROM user_stats WHERE user_id = $1';
-        const result = await this.db.query(query, [userId]);
-        return result.rows[0] || null;
-    }
+                    for (const winner of winners) {
+                        yield* sql`
+                            INSERT INTO meme_winners (
+                                id, contest_id, message_id, author_id, reaction_count,
+                                contest_type, rank, week_start, week_end, submitted_at
+                            )
+                            VALUES (
+                                ${winner.id}, ${winner.contest_id}, ${winner.message_id},
+                                ${winner.author_id}, ${winner.reaction_count}, ${winner.contest_type},
+                                ${winner.rank}, ${winner.week_start}, ${winner.week_end},
+                                ${winner.submitted_at}
+                            )
+                            ON CONFLICT (id) DO UPDATE SET
+                                reaction_count = EXCLUDED.reaction_count,
+                                rank = EXCLUDED.rank
+                        `;
+                    }
 
-    public async getTopContributors(limit: number = 10): Promise<
-        {
-            user_id: string;
-            total_wins: number;
-            meme_wins: number;
-            bone_wins: number;
-        }[]
-    > {
-        const query = `
-            SELECT 
-                user_id,
-                (total_meme_wins + total_bone_wins) as total_wins,
-                total_meme_wins as meme_wins,
-                total_bone_wins as bone_wins
-            FROM user_stats
-            ORDER BY total_wins DESC
-            LIMIT $1
-        `;
-        const result = await this.db.query(query, [limit]);
-        return result.rows;
-    }
+                    // Aggregate wins per author and update their stats.
+                    const statsByUser = new Map<string, { memeWins: number; boneWins: number }>();
+                    for (const winner of winners) {
+                        const stats = statsByUser.get(winner.author_id) ?? {
+                            memeWins: 0,
+                            boneWins: 0,
+                        };
+                        if (winner.contest_type === 'meme') {
+                            stats.memeWins += 1;
+                        } else {
+                            stats.boneWins += 1;
+                        }
+                        statsByUser.set(winner.author_id, stats);
+                    }
 
-    public async getMemeStats(): Promise<{
-        totalMemes: number;
-        totalBones: number;
-        weeklyWinners: number;
-        yearlyWinners: number;
-        topContributors: any[];
-    }> {
-        const totalStatsResult = await this.db.query(`
-            SELECT 
-                SUM(total_meme_wins) as total_memes,
-                SUM(total_bone_wins) as total_bones
-            FROM user_stats
-        `);
+                    for (const [userId, stats] of statsByUser.entries()) {
+                        yield* users.ensureUserId(userId);
+                        yield* sql`
+                            INSERT INTO user_stats (user_id, total_meme_wins, total_bone_wins, updated_at)
+                            VALUES (${userId}, ${stats.memeWins}, ${stats.boneWins}, NOW())
+                            ON CONFLICT (user_id)
+                            DO UPDATE SET
+                                total_meme_wins = user_stats.total_meme_wins + ${stats.memeWins},
+                                total_bone_wins = user_stats.total_bone_wins + ${stats.boneWins},
+                                updated_at = NOW()
+                        `;
+                    }
+                })
+            );
+            yield* Effect.logDebug(`addMemeWinners: inserted ${winners.length} winners`);
+        });
 
-        const weeklyWinnersResult = await this.db.query(`
-            SELECT COUNT(*) as count
-            FROM meme_winners mw
-            JOIN meme_contests mc ON mw.contest_id = mc.id
-            WHERE mc.type = 'weekly'
-        `);
+        const getContestWinners = Effect.fn('MemeRepository.getContestWinners')(function* (
+            contestId: string
+        ) {
+            const rows = yield* sql`
+                SELECT * FROM meme_winners
+                WHERE contest_id = ${contestId}
+                ORDER BY contest_type, rank
+            `;
+            return yield* decodeWinnerRows(rows);
+        });
 
-        const yearlyWinnersResult = await this.db.query(`
-            SELECT COUNT(*) as count
-            FROM meme_winners mw
-            JOIN meme_contests mc ON mw.contest_id = mc.id
-            WHERE mc.type = 'yearly'
-        `);
+        const getUserStats = Effect.fn('MemeRepository.getUserStats')(function* (userId: string) {
+            const rows = yield* sql`SELECT * FROM user_stats WHERE user_id = ${userId}`;
+            const stats = yield* decodeUserStatsRows(rows);
+            return stats.length > 0 ? stats[0] : null;
+        });
 
-        const topContributors = await this.getTopContributors(5);
+        const getTopContributors = Effect.fn('MemeRepository.getTopContributors')(function* (
+            limit: number
+        ) {
+            const rows = yield* sql`
+                SELECT
+                    user_id,
+                    (total_meme_wins + total_bone_wins) as total_wins,
+                    total_meme_wins as meme_wins,
+                    total_bone_wins as bone_wins
+                FROM user_stats
+                ORDER BY total_wins DESC
+                LIMIT ${limit}
+            `;
+            return yield* decodeTopContributorRows(rows);
+        });
+
+        const countWinnersByContestType = Effect.fn('MemeRepository.countWinnersByContestType')(
+            function* (type: 'weekly' | 'yearly') {
+                const rows = yield* sql`
+                    SELECT COUNT(*) as count
+                    FROM meme_winners mw
+                    JOIN meme_contests mc ON mw.contest_id = mc.id
+                    WHERE mc.type = ${type}
+                `;
+                const counts = yield* decodeCountRows(rows);
+                return counts[0].count;
+            }
+        );
+
+        const getMemeStats = Effect.fn('MemeRepository.getMemeStats')(function* () {
+            const totalsRows = yield* sql`
+                SELECT
+                    SUM(total_meme_wins) as total_memes,
+                    SUM(total_bone_wins) as total_bones
+                FROM user_stats
+            `;
+            const totals = yield* decodeTotalsRows(totalsRows);
+
+            return {
+                totalMemes: totals[0].total_memes ?? 0,
+                totalBones: totals[0].total_bones ?? 0,
+                weeklyWinners: yield* countWinnersByContestType('weekly'),
+                yearlyWinners: yield* countWinnersByContestType('yearly'),
+            };
+        });
+
+        const cleanupOldContests = Effect.fn('MemeRepository.cleanupOldContests')(function* (
+            daysOld: number
+        ) {
+            const statement = sql`
+                DELETE FROM meme_contests
+                WHERE status = 'completed'
+                AND created_at < NOW() - make_interval(days => ${daysOld})
+                RETURNING 1 AS deleted
+            `;
+            const rows = yield* statement;
+            return rows.length;
+        });
 
         return {
-            totalMemes: parseInt(totalStatsResult.rows[0]?.total_memes || '0'),
-            totalBones: parseInt(totalStatsResult.rows[0]?.total_bones || '0'),
-            weeklyWinners: parseInt(weeklyWinnersResult.rows[0]?.count || '0'),
-            yearlyWinners: parseInt(yearlyWinnersResult.rows[0]?.count || '0'),
-            topContributors,
-        };
-    }
+            createContest,
+            getContest,
+            getActiveContests,
+            updateContestMessageId,
+            completeContest,
+            addMemeWinners,
+            getContestWinners,
+            getUserStats,
+            getTopContributors,
+            getMemeStats,
+            cleanupOldContests,
+        } as const;
+    }),
+}) {}
 
-    public async cleanupOldContests(daysOld: number = 30): Promise<number> {
-        const query = `
-            DELETE FROM meme_contests 
-            WHERE status = 'completed' 
-            AND created_at < NOW() - INTERVAL '${daysOld} days'
-        `;
-        const result = await this.db.query(query);
-        return result.rowCount || 0;
-    }
-}
+export const MemeRepositoryLive = Layer.effect(MemeRepository)(MemeRepository.make);

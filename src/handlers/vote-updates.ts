@@ -1,26 +1,23 @@
-import { Client, TextChannel } from 'discord.js';
+import type { VoteData } from '../types/vote.js';
+import { TextChannel } from 'discord.js';
+import { Effect } from 'effect';
 
+import { discordCall, DiscordClient } from '../discord/DiscordClient.js';
 import { createVoteEmbed } from '../services/vote-embed.js';
-import { VoteData } from '../types/vote.js';
 
-// We'll need to store a reference to the client for this to work
-let discordClient: Client | null = null;
+// Refreshes the vote embed with the current tallies.
+export const updateVoteMessage = Effect.fn('updateVoteMessage')(function* (vote: VoteData) {
+    if (vote.completed) return;
 
-export function setDiscordClient(client: Client): void {
-    discordClient = client;
-}
+    const client = yield* DiscordClient;
+    const channel = client.channels.cache.get(vote.channelId);
+    if (!channel || !(channel instanceof TextChannel)) return;
 
-export async function updateVoteMessage(vote: VoteData): Promise<void> {
-    if (vote.completed || !discordClient) return;
-
-    const channel = discordClient.channels.cache.get(vote.channelId) as TextChannel;
-    if (!channel) return;
-
-    try {
-        const message = await channel.messages.fetch(vote.messageId);
+    yield* Effect.gen(function* () {
+        const message = yield* discordCall('channel.messages.fetch', () =>
+            channel.messages.fetch(vote.messageId)
+        );
         const embed = createVoteEmbed(vote);
-        await message.edit({ embeds: [embed] });
-    } catch (error) {
-        console.error('Error updating vote message:', error);
-    }
-}
+        yield* discordCall('message.edit', () => message.edit({ embeds: [embed] }));
+    }).pipe(Effect.catchCause(cause => Effect.logError('Error updating vote message:', cause)));
+});

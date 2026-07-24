@@ -8,6 +8,7 @@
         ".": "./dist/index.js"
     },
     "scripts": {
+        "prepare": "./scripts/prepare-effect.sh",
         "lint": "eslint . --cache --ext .js,.jsx,.ts,.tsx",
         "lint:fix": "eslint . --fix --cache --ext .js,.jsx,.ts,.tsx",
         "format": "prettier --check .",
@@ -20,9 +21,9 @@
         "start": "npm run build && npm run migrate:up:prod && npm run register-commands && npm run start:bot",
         "start:bot": "node --enable-source-maps dist/index.js",
         "start:production": "npm run build && npm run migrate:up:prod && npm run register-commands && npm run start:bot",
-        "dev": "npm run migrate:up && npx ts-node --esm src/register-commands.ts && npx ts-node --esm src/index.ts",
-        "dev:register": "npx ts-node --esm src/register-commands.ts",
-        "migrate": "npx ts-node --esm src/scripts/migrate.ts",
+        "dev": "npm run migrate:up && tsx src/register-commands.ts && tsx src/index.ts",
+        "dev:register": "tsx src/register-commands.ts",
+        "migrate": "tsx src/scripts/migrate.ts",
         "migrate:prod": "node dist/scripts/migrate.js",
         "migrate:up": "npm run migrate up",
         "migrate:up:prod": "npm run migrate:prod up",
@@ -35,25 +36,23 @@
         "setup": "npm run migrate:create-db && npm run migrate:up"
     },
     "devDependencies": {
-        "@types/pg": "^8.10.9",
         "@typescript-eslint/eslint-plugin": "^5.58.0",
         "@typescript-eslint/parser": "^5.58.0",
         "eslint": "^8.38.0",
         "eslint-plugin-import": "^2.27.5",
         "eslint-plugin-unicorn": "^46.0.0",
         "prettier": "^2.8.7",
+        "tsx": "^4.23.1",
         "typescript": "^5.4.5"
     },
     "dependencies": {
         "@discordjs/builders": "^1.6.1",
         "@discordjs/rest": "^1.7.0",
-        "@types/uuid": "^10.0.0",
-        "cron": "^3.2.1",
+        "@effect/platform-node": "^4.0.0-beta.101",
+        "@effect/sql-pg": "^4.0.0-beta.101",
         "dayjs": "^1.11.7",
         "discord-api-types": "^0.37.39",
         "discord.js": "^14.9.0",
-        "pg": "^8.11.3",
-        "ts-node": "^10.9.1",
-        "uuid": "^13.0.0"
+        "effect": "^4.0.0-beta.101"
     }
 }

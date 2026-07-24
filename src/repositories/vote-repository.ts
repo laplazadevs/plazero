@@ -1,223 +1,207 @@
-import { User } from 'discord.js';
+import type { PlazeroUser } from '../types/user.js';
+import { Context, Effect, Layer, Schema } from 'effect';
+import * as SqlClient from 'effect/unstable/sql/SqlClient';
 
 import { UserRepository } from './user-repository.js';
-import { DatabaseService } from '../services/database-service.js';
+import { CountRow, UserCooldownRow, VoteReactionRow, VoteRow } from '../db/schemas.js';
 
-export interface VoteData {
-    id: string;
-    target_user_id: string;
-    initiator_id: string;
-    reason: string;
-    start_time: Date;
-    end_time?: Date;
-    message_id: string;
-    channel_id: string;
-    completed: boolean;
-    timeout_applied: boolean;
-    final_up_votes: number;
-    final_down_votes: number;
-    final_net_votes: number;
-    created_at: Date;
-}
+export type VoteReactionType = 'up' | 'down' | 'white';
 
-export interface VoteReactionData {
-    id: number;
-    vote_id: string;
-    user_id: string;
-    reaction_type: 'up' | 'down' | 'white';
-    weight: number;
-    created_at: Date;
-}
+const decodeVoteRows = Schema.decodeUnknownEffect(Schema.Array(VoteRow));
+const decodeReactionRows = Schema.decodeUnknownEffect(Schema.Array(VoteReactionRow));
+const decodeCooldownRows = Schema.decodeUnknownEffect(Schema.Array(UserCooldownRow));
+const decodeCountRows = Schema.decodeUnknownEffect(Schema.Array(CountRow));
 
-export interface UserCooldownData {
-    user_id: string;
-    last_vote_time: Date;
-    created_at: Date;
-}
+export class VoteRepository extends Context.Service<VoteRepository>()('plazero/VoteRepository', {
+    make: Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const users = yield* UserRepository;
 
-export class VoteRepository {
-    private db: DatabaseService;
-    private userRepo: UserRepository;
+        const createVote = Effect.fn('VoteRepository.createVote')(function* (
+            voteId: string,
+            targetUser: PlazeroUser,
+            initiator: PlazeroUser,
+            reason: string,
+            messageId: string,
+            channelId: string
+        ) {
+            return yield* sql.withTransaction(
+                Effect.gen(function* () {
+                    yield* users.upsertUser(targetUser);
+                    yield* users.upsertUser(initiator);
 
-    constructor() {
-        this.db = DatabaseService.getInstance();
-        this.userRepo = new UserRepository();
-    }
-
-    public async createVote(
-        voteId: string,
-        targetUser: User,
-        initiator: User,
-        reason: string,
-        messageId: string,
-        channelId: string
-    ): Promise<VoteData> {
-        return await this.db.transaction(async client => {
-            // Ensure users exist in database
-            await this.userRepo.upsertUser(targetUser);
-            await this.userRepo.upsertUser(initiator);
-
-            const query = `
-                INSERT INTO votes (
-                    id, target_user_id, initiator_id, reason, start_time, 
-                    message_id, channel_id, completed
-                )
-                VALUES ($1, $2, $3, $4, NOW(), $5, $6, FALSE)
-                RETURNING *
-            `;
-
-            const result = await client.query(query, [
-                voteId,
-                targetUser.id,
-                initiator.id,
-                reason,
-                messageId,
-                channelId,
-            ]);
-
-            return result.rows[0];
+                    const rows = yield* sql`
+                        INSERT INTO votes (
+                            id, target_user_id, initiator_id, reason, start_time,
+                            message_id, channel_id, completed
+                        )
+                        VALUES (
+                            ${voteId}, ${targetUser.id}, ${initiator.id}, ${reason}, NOW(),
+                            ${messageId}, ${channelId}, FALSE
+                        )
+                        RETURNING *
+                    `;
+                    const votes = yield* decodeVoteRows(rows);
+                    return votes[0];
+                })
+            );
         });
-    }
 
-    public async getVote(voteId: string): Promise<VoteData | null> {
-        const query = 'SELECT * FROM votes WHERE id = $1';
-        const result = await this.db.query(query, [voteId]);
-        return result.rows[0] || null;
-    }
+        const getVote = Effect.fn('VoteRepository.getVote')(function* (voteId: string) {
+            const rows = yield* sql`SELECT * FROM votes WHERE id = ${voteId}`;
+            const votes = yield* decodeVoteRows(rows);
+            return votes.length > 0 ? votes[0] : null;
+        });
 
-    public async getVoteByMessageId(messageId: string): Promise<VoteData | null> {
-        const query = 'SELECT * FROM votes WHERE message_id = $1';
-        const result = await this.db.query(query, [messageId]);
-        return result.rows[0] || null;
-    }
+        const getVoteByMessageId = Effect.fn('VoteRepository.getVoteByMessageId')(function* (
+            messageId: string
+        ) {
+            const rows = yield* sql`SELECT * FROM votes WHERE message_id = ${messageId}`;
+            const votes = yield* decodeVoteRows(rows);
+            return votes.length > 0 ? votes[0] : null;
+        });
 
-    public async getActiveVotes(): Promise<VoteData[]> {
-        const query = 'SELECT * FROM votes WHERE completed = FALSE';
-        const result = await this.db.query(query);
-        return result.rows;
-    }
+        const getActiveVotes = Effect.fn('VoteRepository.getActiveVotes')(function* () {
+            const rows = yield* sql`SELECT * FROM votes WHERE completed = FALSE`;
+            return yield* decodeVoteRows(rows);
+        });
 
-    public async hasActiveVoteAgainst(userId: string): Promise<boolean> {
-        const query = 'SELECT 1 FROM votes WHERE target_user_id = $1 AND completed = FALSE LIMIT 1';
-        const result = await this.db.query(query, [userId]);
-        return result.rows.length > 0;
-    }
+        const hasActiveVoteAgainst = Effect.fn('VoteRepository.hasActiveVoteAgainst')(function* (
+            userId: string
+        ) {
+            const rows = yield* sql`
+                SELECT 1 FROM votes
+                WHERE target_user_id = ${userId} AND completed = FALSE
+                LIMIT 1
+            `;
+            return rows.length > 0;
+        });
 
-    public async completeVote(
-        voteId: string,
-        upVotes: number,
-        downVotes: number,
-        netVotes: number,
-        timeoutApplied: boolean
-    ): Promise<void> {
-        const query = `
-            UPDATE votes 
-            SET completed = TRUE, 
-                end_time = NOW(),
-                final_up_votes = $2,
-                final_down_votes = $3,
-                final_net_votes = $4,
-                timeout_applied = $5
-            WHERE id = $1
-        `;
+        const completeVote = Effect.fn('VoteRepository.completeVote')(function* (
+            voteId: string,
+            upVotes: number,
+            downVotes: number,
+            netVotes: number,
+            timeoutApplied: boolean
+        ) {
+            yield* sql`
+                UPDATE votes
+                SET completed = TRUE,
+                    end_time = NOW(),
+                    final_up_votes = ${upVotes},
+                    final_down_votes = ${downVotes},
+                    final_net_votes = ${netVotes},
+                    timeout_applied = ${timeoutApplied}
+                WHERE id = ${voteId}
+            `;
+        });
 
-        await this.db.query(query, [voteId, upVotes, downVotes, netVotes, timeoutApplied]);
-    }
+        const addVoteReaction = Effect.fn('VoteRepository.addVoteReaction')(function* (
+            voteId: string,
+            userId: string,
+            reactionType: VoteReactionType,
+            weight: number
+        ) {
+            yield* sql`
+                INSERT INTO vote_reactions (vote_id, user_id, reaction_type, weight)
+                VALUES (${voteId}, ${userId}, ${reactionType}, ${weight})
+                ON CONFLICT (vote_id, user_id, reaction_type)
+                DO UPDATE SET weight = EXCLUDED.weight, created_at = NOW()
+            `;
+        });
 
-    public async addVoteReaction(
-        voteId: string,
-        userId: string,
-        reactionType: 'up' | 'down' | 'white',
-        weight: number
-    ): Promise<void> {
-        const query = `
-            INSERT INTO vote_reactions (vote_id, user_id, reaction_type, weight)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (vote_id, user_id, reaction_type)
-            DO UPDATE SET weight = EXCLUDED.weight, created_at = NOW()
-        `;
+        const removeVoteReaction = Effect.fn('VoteRepository.removeVoteReaction')(function* (
+            voteId: string,
+            userId: string,
+            reactionType: VoteReactionType
+        ) {
+            yield* sql`
+                DELETE FROM vote_reactions
+                WHERE vote_id = ${voteId} AND user_id = ${userId} AND reaction_type = ${reactionType}
+            `;
+        });
 
-        await this.db.query(query, [voteId, userId, reactionType, weight]);
-    }
+        const getVoteReactions = Effect.fn('VoteRepository.getVoteReactions')(function* (
+            voteId: string
+        ) {
+            const rows = yield* sql`SELECT * FROM vote_reactions WHERE vote_id = ${voteId}`;
+            return yield* decodeReactionRows(rows);
+        });
 
-    public async removeVoteReaction(
-        voteId: string,
-        userId: string,
-        reactionType: 'up' | 'down' | 'white'
-    ): Promise<void> {
-        const query = `
-            DELETE FROM vote_reactions 
-            WHERE vote_id = $1 AND user_id = $2 AND reaction_type = $3
-        `;
+        const setUserCooldown = Effect.fn('VoteRepository.setUserCooldown')(function* (
+            userId: string,
+            lastVoteTime: Date
+        ) {
+            yield* sql`
+                INSERT INTO user_cooldowns (user_id, last_vote_time)
+                VALUES (${userId}, ${lastVoteTime})
+                ON CONFLICT (user_id)
+                DO UPDATE SET last_vote_time = EXCLUDED.last_vote_time
+            `;
+        });
 
-        await this.db.query(query, [voteId, userId, reactionType]);
-    }
+        const getUserCooldown = Effect.fn('VoteRepository.getUserCooldown')(function* (
+            userId: string
+        ) {
+            const rows = yield* sql`SELECT * FROM user_cooldowns WHERE user_id = ${userId}`;
+            const cooldowns = yield* decodeCooldownRows(rows);
+            return cooldowns.length > 0 ? cooldowns[0] : null;
+        });
 
-    public async getVoteReactions(voteId: string): Promise<VoteReactionData[]> {
-        const query = 'SELECT * FROM vote_reactions WHERE vote_id = $1';
-        const result = await this.db.query(query, [voteId]);
-        return result.rows;
-    }
+        const isUserOnCooldown = Effect.fn('VoteRepository.isUserOnCooldown')(function* (
+            userId: string,
+            cooldownDurationMs: number
+        ) {
+            const cooldown = yield* getUserCooldown(userId);
+            if (!cooldown) {
+                return { onCooldown: false as const };
+            }
 
-    public async setUserCooldown(userId: string, lastVoteTime: Date): Promise<void> {
-        const query = `
-            INSERT INTO user_cooldowns (user_id, last_vote_time)
-            VALUES ($1, $2)
-            ON CONFLICT (user_id)
-            DO UPDATE SET last_vote_time = EXCLUDED.last_vote_time
-        `;
+            const timePassed = Date.now() - cooldown.last_vote_time.getTime();
+            if (timePassed < cooldownDurationMs) {
+                const remainingTime = Math.ceil((cooldownDurationMs - timePassed) / 60000);
+                return { onCooldown: true as const, remainingTime };
+            }
 
-        await this.db.query(query, [userId, lastVoteTime]);
-    }
+            return { onCooldown: false as const };
+        });
 
-    public async getUserCooldown(userId: string): Promise<UserCooldownData | null> {
-        const query = 'SELECT * FROM user_cooldowns WHERE user_id = $1';
-        const result = await this.db.query(query, [userId]);
-        return result.rows[0] || null;
-    }
+        const countVotes = Effect.fn('VoteRepository.countVotes')(function* (completed: boolean) {
+            const rows = yield* sql`SELECT COUNT(*) FROM votes WHERE completed = ${completed}`;
+            const counts = yield* decodeCountRows(rows);
+            return counts[0].count;
+        });
 
-    public async isUserOnCooldown(
-        userId: string,
-        cooldownDurationMs: number
-    ): Promise<{
-        onCooldown: boolean;
-        remainingTime?: number;
-    }> {
-        const cooldown = await this.getUserCooldown(userId);
-        if (!cooldown) {
-            return { onCooldown: false };
-        }
+        const getVoteStats = Effect.fn('VoteRepository.getVoteStats')(function* () {
+            const activeVotes = yield* countVotes(false);
+            const completedVotes = yield* countVotes(true);
+            const cooldownRows = yield* sql`SELECT COUNT(*) FROM user_cooldowns`;
+            const cooldownCounts = yield* decodeCountRows(cooldownRows);
 
-        const now = Date.now();
-        const timePassed = now - cooldown.last_vote_time.getTime();
-
-        if (timePassed < cooldownDurationMs) {
-            const remainingTime = Math.ceil((cooldownDurationMs - timePassed) / 60000);
-            return { onCooldown: true, remainingTime };
-        }
-
-        return { onCooldown: false };
-    }
-
-    public async getVoteStats(): Promise<{
-        activeVotes: number;
-        completedVotes: number;
-        ongoingVotes: number;
-        userCooldowns: number;
-    }> {
-        const activeResult = await this.db.query(
-            'SELECT COUNT(*) FROM votes WHERE completed = FALSE'
-        );
-        const completedResult = await this.db.query(
-            'SELECT COUNT(*) FROM votes WHERE completed = TRUE'
-        );
-        const cooldownResult = await this.db.query('SELECT COUNT(*) FROM user_cooldowns');
+            return {
+                activeVotes,
+                completedVotes,
+                ongoingVotes: activeVotes,
+                userCooldowns: cooldownCounts[0].count,
+            };
+        });
 
         return {
-            activeVotes: parseInt(activeResult.rows[0].count),
-            completedVotes: parseInt(completedResult.rows[0].count),
-            ongoingVotes: parseInt(activeResult.rows[0].count),
-            userCooldowns: parseInt(cooldownResult.rows[0].count),
-        };
-    }
-}
+            createVote,
+            getVote,
+            getVoteByMessageId,
+            getActiveVotes,
+            hasActiveVoteAgainst,
+            completeVote,
+            addVoteReaction,
+            removeVoteReaction,
+            getVoteReactions,
+            setUserCooldown,
+            getUserCooldown,
+            isUserOnCooldown,
+            getVoteStats,
+        } as const;
+    }),
+}) {}
+
+export const VoteRepositoryLive = Layer.effect(VoteRepository)(VoteRepository.make);

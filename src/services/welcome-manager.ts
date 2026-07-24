@@ -1,177 +1,165 @@
-import { User } from 'discord.js';
-import { v4 as uuidv4 } from 'uuid';
+import type { WelcomeRequestRow } from '../db/schemas.js';
+import type { WelcomeData } from '../types/welcome.js';
+import { Context, Effect, Layer } from 'effect';
+import { randomUUID } from 'node:crypto';
 
 import { UserRepository } from '../repositories/user-repository.js';
-import { WelcomeRepository } from '../repositories/welcome-repository.js';
-import { WelcomeData } from '../types/welcome.js';
+import { WelcomeRepository, WelcomeRequestUpdates } from '../repositories/welcome-repository.js';
+import { type PlazeroUser, plazeroUserFromRow } from '../types/user.js';
 
-export class WelcomeManager {
-    private welcomeRepo: WelcomeRepository;
-    private userRepo: UserRepository;
+export class WelcomeManager extends Context.Service<WelcomeManager>()('plazero/WelcomeManager', {
+    make: Effect.gen(function* () {
+        const welcomeRepo = yield* WelcomeRepository;
+        const userRepo = yield* UserRepository;
 
-    constructor() {
-        this.welcomeRepo = new WelcomeRepository();
-        this.userRepo = new UserRepository();
-    }
+        const convertToWelcomeData = Effect.fn('WelcomeManager.convertToWelcomeData')(function* (
+            requestRow: WelcomeRequestRow,
+            user: PlazeroUser
+        ) {
+            const result: WelcomeData = {
+                id: requestRow.id,
+                user,
+                joinTime: requestRow.join_time,
+                messageId: requestRow.message_id,
+                channelId: requestRow.channel_id,
+                approved: requestRow.approved,
+            };
 
-    async createWelcomeRequest(
-        user: User,
-        messageId: string,
-        channelId: string
-    ): Promise<WelcomeData> {
-        const requestId = uuidv4();
+            if (requestRow.linkedin_url) {
+                result.linkedinUrl = requestRow.linkedin_url;
+            }
+            if (requestRow.presentation) {
+                result.presentation = requestRow.presentation;
+            }
+            if (requestRow.invited_by) {
+                result.invitedBy = requestRow.invited_by;
+            }
+            if (requestRow.approved_by_id) {
+                const approverRow = yield* userRepo.getUser(requestRow.approved_by_id);
+                if (approverRow) {
+                    result.approvedBy = plazeroUserFromRow(approverRow);
+                }
+            }
+            if (requestRow.approved_at) {
+                result.approvedAt = requestRow.approved_at;
+            }
 
-        const welcomeData = await this.welcomeRepo.createWelcomeRequest(
-            requestId,
-            user,
-            messageId,
-            channelId
+            return result;
+        });
+
+        const loadWithUser = Effect.fn('WelcomeManager.loadWithUser')(function* (
+            requestRow: WelcomeRequestRow | null
+        ) {
+            if (!requestRow) return undefined;
+
+            const userRow = yield* userRepo.getUser(requestRow.user_id);
+            if (!userRow) return undefined;
+
+            return yield* convertToWelcomeData(requestRow, plazeroUserFromRow(userRow));
+        });
+
+        const createWelcomeRequest = Effect.fn('WelcomeManager.createWelcomeRequest')(function* (
+            user: PlazeroUser,
+            messageId: string,
+            channelId: string
+        ) {
+            const requestId = randomUUID();
+            const requestRow = yield* welcomeRepo.createWelcomeRequest(
+                requestId,
+                user,
+                messageId,
+                channelId
+            );
+            return yield* convertToWelcomeData(requestRow, user);
+        });
+
+        const getWelcomeRequest = Effect.fn('WelcomeManager.getWelcomeRequest')(function* (
+            id: string
+        ) {
+            return yield* loadWithUser(yield* welcomeRepo.getWelcomeRequest(id));
+        });
+
+        const getWelcomeRequestByMessageId = Effect.fn(
+            'WelcomeManager.getWelcomeRequestByMessageId'
+        )(function* (messageId: string) {
+            return yield* loadWithUser(yield* welcomeRepo.getWelcomeRequestByMessageId(messageId));
+        });
+
+        const updateWelcomeRequest = Effect.fn('WelcomeManager.updateWelcomeRequest')(function* (
+            id: string,
+            updates: Partial<WelcomeData>
+        ) {
+            const dbUpdates: WelcomeRequestUpdates = {
+                ...(updates.linkedinUrl !== undefined && { linkedin_url: updates.linkedinUrl }),
+                ...(updates.presentation !== undefined && { presentation: updates.presentation }),
+                ...(updates.invitedBy !== undefined && { invited_by: updates.invitedBy }),
+                ...(updates.messageId !== undefined && { message_id: updates.messageId }),
+            };
+
+            return yield* welcomeRepo.updateWelcomeRequest(id, dbUpdates);
+        });
+
+        const approveWelcomeRequest = Effect.fn('WelcomeManager.approveWelcomeRequest')(function* (
+            id: string,
+            approvedBy: PlazeroUser
+        ) {
+            return yield* welcomeRepo.approveWelcomeRequest(id, approvedBy);
+        });
+
+        const getAllPendingRequests = Effect.fn('WelcomeManager.getAllPendingRequests')(
+            function* () {
+                const pendingRequests = yield* welcomeRepo.getPendingRequests();
+                const result: WelcomeData[] = [];
+
+                for (const requestRow of pendingRequests) {
+                    const welcomeData = yield* loadWithUser(requestRow);
+                    if (welcomeData) {
+                        result.push(welcomeData);
+                    }
+                }
+
+                return result;
+            }
         );
 
-        return await this.convertToWelcomeData(welcomeData, user);
-    }
+        const getAllApprovedRequests = Effect.fn('WelcomeManager.getAllApprovedRequests')(
+            function* () {
+                const approvedRequests = yield* welcomeRepo.getApprovedRequests();
+                const result: WelcomeData[] = [];
 
-    async getWelcomeRequest(id: string): Promise<WelcomeData | undefined> {
-        console.log(`🔧 WelcomeManager.getWelcomeRequest called with id:`, id);
+                for (const requestRow of approvedRequests) {
+                    const welcomeData = yield* loadWithUser(requestRow);
+                    if (welcomeData) {
+                        result.push(welcomeData);
+                    }
+                }
 
-        const requestData = await this.welcomeRepo.getWelcomeRequest(id);
-        console.log(`🔧 Retrieved requestData from repository:`, requestData);
-
-        if (!requestData) {
-            console.log(`🔧 No request data found for id:`, id);
-            return undefined;
-        }
-
-        const userData = await this.userRepo.getUser(requestData.user_id);
-        if (!userData) {
-            console.log(`🔧 No user data found for user_id:`, requestData.user_id);
-            return undefined;
-        }
-
-        const user = this.convertToUser(userData);
-        const welcomeData = await this.convertToWelcomeData(requestData, user);
-        console.log(`🔧 Converted to WelcomeData:`, welcomeData);
-        return welcomeData;
-    }
-
-    async getWelcomeRequestByMessageId(messageId: string): Promise<WelcomeData | undefined> {
-        const requestData = await this.welcomeRepo.getWelcomeRequestByMessageId(messageId);
-        if (!requestData) return undefined;
-
-        const userData = await this.userRepo.getUser(requestData.user_id);
-        if (!userData) return undefined;
-
-        const user = this.convertToUser(userData);
-        return await this.convertToWelcomeData(requestData, user);
-    }
-
-    async updateWelcomeRequest(id: string, updates: Partial<WelcomeData>): Promise<boolean> {
-        console.log(`🔧 WelcomeManager.updateWelcomeRequest called with:`, { id, updates });
-
-        const dbUpdates: any = {};
-
-        if (updates.linkedinUrl !== undefined) {
-            dbUpdates.linkedin_url = updates.linkedinUrl;
-        }
-        if (updates.presentation !== undefined) {
-            dbUpdates.presentation = updates.presentation;
-        }
-        if (updates.invitedBy !== undefined) {
-            dbUpdates.invited_by = updates.invitedBy;
-        }
-        if (updates.messageId !== undefined) {
-            dbUpdates.message_id = updates.messageId;
-        }
-
-        console.log(`🔧 Converted to dbUpdates:`, dbUpdates);
-        const result = await this.welcomeRepo.updateWelcomeRequest(id, dbUpdates);
-        console.log(`🔧 Repository update result:`, result);
-        return result;
-    }
-
-    async approveWelcomeRequest(id: string, approvedBy: User): Promise<boolean> {
-        const success = await this.welcomeRepo.approveWelcomeRequest(id, approvedBy);
-        return success;
-    }
-
-    async getAllPendingRequests(): Promise<WelcomeData[]> {
-        const pendingRequests = await this.welcomeRepo.getPendingRequests();
-        const result: WelcomeData[] = [];
-
-        for (const requestData of pendingRequests) {
-            const userData = await this.userRepo.getUser(requestData.user_id);
-            if (userData) {
-                const user = this.convertToUser(userData);
-                result.push(await this.convertToWelcomeData(requestData, user));
+                return result;
             }
-        }
+        );
 
-        return result;
-    }
+        const removeWelcomeRequest = Effect.fn('WelcomeManager.removeWelcomeRequest')(function* (
+            id: string
+        ) {
+            return yield* welcomeRepo.deleteWelcomeRequest(id);
+        });
 
-    async getAllApprovedRequests(): Promise<WelcomeData[]> {
-        const approvedRequests = await this.welcomeRepo.getApprovedRequests();
-        const result: WelcomeData[] = [];
+        const getStats = Effect.fn('WelcomeManager.getStats')(function* () {
+            return yield* welcomeRepo.getWelcomeStats();
+        });
 
-        for (const requestData of approvedRequests) {
-            const userData = await this.userRepo.getUser(requestData.user_id);
-            if (userData) {
-                const user = this.convertToUser(userData);
-                result.push(await this.convertToWelcomeData(requestData, user));
-            }
-        }
-
-        return result;
-    }
-
-    async removeWelcomeRequest(id: string): Promise<boolean> {
-        return await this.welcomeRepo.deleteWelcomeRequest(id);
-    }
-
-    async getStats(): Promise<{ total: number; pending: number; approved: number }> {
-        return await this.welcomeRepo.getWelcomeStats();
-    }
-
-    // Helper methods
-    private async convertToWelcomeData(requestData: any, user: User): Promise<WelcomeData> {
-        const result: WelcomeData = {
-            id: requestData.id,
-            user,
-            joinTime: requestData.join_time,
-            messageId: requestData.message_id,
-            channelId: requestData.channel_id,
-            approved: requestData.approved,
-        };
-
-        if (requestData.linkedin_url) {
-            result.linkedinUrl = requestData.linkedin_url;
-        }
-        if (requestData.presentation) {
-            result.presentation = requestData.presentation;
-        }
-        if (requestData.invited_by) {
-            result.invitedBy = requestData.invited_by;
-        }
-        if (requestData.approved_by_id) {
-            // Fetch the approver user data
-            const approverData = await this.userRepo.getUser(requestData.approved_by_id);
-            if (approverData) {
-                result.approvedBy = this.convertToUser(approverData);
-            }
-        }
-        if (requestData.approved_at) {
-            result.approvedAt = requestData.approved_at;
-        }
-
-        return result;
-    }
-
-    private convertToUser(userData: any): User {
         return {
-            id: userData.id,
-            username: userData.username,
-            discriminator: userData.discriminator,
-            displayAvatarURL: () => userData.avatar_url,
-        } as User;
-    }
-}
+            createWelcomeRequest,
+            getWelcomeRequest,
+            getWelcomeRequestByMessageId,
+            updateWelcomeRequest,
+            approveWelcomeRequest,
+            getAllPendingRequests,
+            getAllApprovedRequests,
+            removeWelcomeRequest,
+            getStats,
+        } as const;
+    }),
+}) {}
+
+export const WelcomeManagerLive = Layer.effect(WelcomeManager)(WelcomeManager.make);

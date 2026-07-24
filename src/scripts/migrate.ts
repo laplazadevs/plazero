@@ -1,15 +1,14 @@
 #!/usr/bin/env node
+import * as NodeRuntime from '@effect/platform-node/NodeRuntime';
+import * as NodeServices from '@effect/platform-node/NodeServices';
+import { Console, Effect, Layer } from 'effect';
 
-import { Pool } from 'pg';
+import { DotEnvConfigProviderLive } from '../config/AppConfigProvider.js';
+import { targetDatabaseName } from '../config/env.js';
+import { ensureDatabaseExists, Migrations, MigrationsLive } from '../db/Migrations.js';
+import { PgLive } from '../db/PgLive.js';
 
-import { MigrationManager } from '../migrations/migration-manager.js';
-import { getPoolConfig, parseDatabaseConfig } from '../utils/database-config.js';
-
-async function main(): Promise<void> {
-    const command = process.argv[2];
-
-    if (!command) {
-        console.log(`
+const usage = `
 🔄 Plazero Bot Database Migration Tool
 
 Usage:
@@ -26,129 +25,98 @@ Examples:
   npm run migrate status
   npm run migrate rollback 1
   npm run migrate create-db
-        `);
-        process.exit(1);
+`;
+
+// Layer for commands that talk to the target database.
+const MigrateLive = MigrationsLive.pipe(
+    Layer.provideMerge(PgLive),
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provide(DotEnvConfigProviderLive)
+);
+
+// Layer for commands that must work before the target database exists.
+const AdminLive = Layer.mergeAll(NodeServices.layer, DotEnvConfigProviderLive);
+
+const logConnectionTarget = Effect.gen(function* () {
+    const databaseName = yield* targetDatabaseName;
+    yield* Console.log(`🔗 Target database: ${databaseName}`);
+});
+
+const runUp = Effect.gen(function* () {
+    const migrations = yield* Migrations;
+    yield* migrations.up();
+    yield* Console.log('🎉 All migrations completed successfully!');
+});
+
+const showStatus = Effect.gen(function* () {
+    const migrations = yield* Migrations;
+    const statuses = yield* migrations.status();
+
+    yield* Console.log('\n📊 Migration Status:');
+    yield* Console.log('==================');
+
+    for (const migration of statuses) {
+        const status = migration.applied ? '✅ Applied' : '⏳ Pending';
+        yield* Console.log(
+            `${migration.version.toString().padStart(3)}: ${migration.name.padEnd(30)} ${status}`
+        );
     }
 
-    const dbConfig = parseDatabaseConfig();
+    const appliedCount = statuses.filter(migration => migration.applied).length;
+    yield* Console.log(`\nTotal: ${statuses.length} migrations, ${appliedCount} applied`);
+});
 
-    console.log(
-        `🔗 Connecting to database: ${dbConfig.user}@${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`
-    );
+const runRollback = Effect.fn('migrate.runRollback')(function* (version: number) {
+    const migrations = yield* Migrations;
+    yield* migrations.rollback(version);
+    yield* Console.log(`🎉 Migration ${version} rolled back successfully!`);
+});
 
-    try {
-        switch (command) {
-            case 'create-db':
-                await createDatabase();
-                break;
-            case 'up':
-                await runMigrations();
-                break;
-            case 'status':
-                await showStatus();
-                break;
-            case 'rollback': {
-                const version = process.argv[3];
-                if (!version) {
-                    console.error('❌ Please specify migration version to rollback');
-                    console.log('Usage: npm run migrate rollback <version>');
-                    process.exit(1);
-                }
-                await rollbackMigration(parseInt(version));
-                break;
+const main = Effect.gen(function* () {
+    const command = process.argv[2];
+
+    if (!command) {
+        yield* Console.log(usage);
+        yield* Effect.sync(() => {
+            process.exitCode = 1;
+        });
+        return;
+    }
+
+    yield* logConnectionTarget.pipe(Effect.provide(AdminLive));
+
+    switch (command) {
+        case 'create-db':
+            yield* ensureDatabaseExists().pipe(Effect.provide(AdminLive));
+            break;
+        case 'up':
+            // The database may not exist yet, so it is created through the
+            // admin connection before the migration layer connects to it.
+            yield* ensureDatabaseExists().pipe(Effect.provide(AdminLive));
+            yield* runUp.pipe(Effect.provide(MigrateLive));
+            break;
+        case 'status':
+            yield* showStatus.pipe(Effect.provide(MigrateLive));
+            break;
+        case 'rollback': {
+            const version = process.argv[3];
+            if (!version) {
+                yield* Console.error('❌ Please specify migration version to rollback');
+                yield* Console.log('Usage: npm run migrate rollback <version>');
+                yield* Effect.sync(() => {
+                    process.exitCode = 1;
+                });
+                return;
             }
-            default:
-                console.error(`❌ Unknown command: ${command}`);
-                process.exit(1);
+            yield* runRollback(Number.parseInt(version, 10)).pipe(Effect.provide(MigrateLive));
+            break;
         }
-    } catch (error) {
-        console.error('❌ Migration failed:', error);
-        process.exit(1);
+        default:
+            yield* Console.error(`❌ Unknown command: ${command}`);
+            yield* Effect.sync(() => {
+                process.exitCode = 1;
+            });
     }
-}
+});
 
-async function createDatabase(): Promise<void> {
-    const poolConfig = getPoolConfig();
-
-    // For database creation, we need to connect to the 'postgres' database
-    // If using connectionString, we need to modify it to point to 'postgres' database
-    let adminPoolConfig;
-    if (poolConfig.connectionString) {
-        // Parse the connection string and modify the database name
-        const url = new URL(poolConfig.connectionString);
-        url.pathname = '/postgres';
-        adminPoolConfig = { connectionString: url.toString() };
-    } else {
-        // Use individual config but connect to 'postgres' database
-        adminPoolConfig = {
-            ...poolConfig,
-            database: 'postgres',
-        };
-    }
-
-    const adminPool = new Pool(adminPoolConfig);
-
-    try {
-        // Get the target database name
-        const dbConfig = parseDatabaseConfig();
-
-        // Check if database exists
-        const result = await adminPool.query('SELECT 1 FROM pg_database WHERE datname = $1', [
-            dbConfig.database,
-        ]);
-
-        if (result.rows.length === 0) {
-            console.log(`📝 Creating database: ${dbConfig.database}`);
-            await adminPool.query(`CREATE DATABASE "${dbConfig.database}"`);
-            console.log(`✅ Database '${dbConfig.database}' created successfully`);
-        } else {
-            console.log(`✅ Database '${dbConfig.database}' already exists`);
-        }
-    } finally {
-        await adminPool.end();
-    }
-}
-
-async function runMigrations(): Promise<void> {
-    const pool = createPool();
-    const migrationManager = new MigrationManager(pool);
-
-    try {
-        await migrationManager.ensureDatabaseExists();
-        await migrationManager.runMigrations();
-        console.log('🎉 All migrations completed successfully!');
-    } finally {
-        await pool.end();
-    }
-}
-
-async function showStatus(): Promise<void> {
-    const pool = createPool();
-    const migrationManager = new MigrationManager(pool);
-
-    try {
-        await migrationManager.getMigrationStatus();
-    } finally {
-        await pool.end();
-    }
-}
-
-async function rollbackMigration(version: number): Promise<void> {
-    const pool = createPool();
-    const migrationManager = new MigrationManager(pool);
-
-    try {
-        await migrationManager.rollbackMigration(version);
-        console.log(`🎉 Migration ${version} rolled back successfully!`);
-    } finally {
-        await pool.end();
-    }
-}
-
-function createPool(): Pool {
-    const poolConfig = getPoolConfig();
-
-    return new Pool(poolConfig);
-}
-
-main().catch(console.error);
+NodeRuntime.runMain(main);
