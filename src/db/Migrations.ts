@@ -1,10 +1,10 @@
+import { fileURLToPath } from 'node:url';
 import * as PgClient from '@effect/sql-pg/PgClient';
 import { Context, Effect, Layer, Schema } from 'effect';
 import * as FileSystem from 'effect/FileSystem';
 import * as Path from 'effect/Path';
 import * as Reactivity from 'effect/unstable/reactivity/Reactivity';
 import * as SqlClient from 'effect/unstable/sql/SqlClient';
-import { fileURLToPath } from 'node:url';
 
 import { adminPoolConfig, targetDatabaseName } from '../config/env.js';
 
@@ -163,9 +163,18 @@ export class Migrations extends Context.Service<Migrations>()('plazero/Migration
 
         return { loadMigrations, up, rollback, status } as const;
     }),
-}) {}
+}) {
+    static readonly layer = Layer.effect(Migrations)(Migrations.make);
 
-export const MigrationsLive = Layer.effect(Migrations)(Migrations.make);
+    // Startup layer: runs pending migrations while the application layers are
+    // being built, gating anything provided on top of it (the Discord login).
+    static readonly boot = Layer.effectDiscard(
+        Effect.gen(function* () {
+            const migrations = yield* Migrations;
+            yield* migrations.up();
+        })
+    );
+}
 
 // Connects to the maintenance `postgres` database and creates the target
 // database when missing. Used by `migrate create-db` and before `migrate up`.

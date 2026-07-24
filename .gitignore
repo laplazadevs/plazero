@@ -2,8 +2,6 @@
 node_modules
 .repos/effect
 dist
-.eslintcache
-.prettiercache
 .idea
 .vercel
 .env*

@@ -5,7 +5,7 @@ import { Console, Effect, Layer } from 'effect';
 
 import { DotEnvConfigProviderLive } from '../config/AppConfigProvider.js';
 import { targetDatabaseName } from '../config/env.js';
-import { ensureDatabaseExists, Migrations, MigrationsLive } from '../db/Migrations.js';
+import { ensureDatabaseExists, Migrations } from '../db/Migrations.js';
 import { PgLive } from '../db/PgLive.js';
 
 const usage = `
@@ -28,7 +28,7 @@ Examples:
 `;
 
 // Layer for commands that talk to the target database.
-const MigrateLive = MigrationsLive.pipe(
+const MigrateLive = Migrations.layer.pipe(
     Layer.provideMerge(PgLive),
     Layer.provideMerge(NodeServices.layer),
     Layer.provide(DotEnvConfigProviderLive)

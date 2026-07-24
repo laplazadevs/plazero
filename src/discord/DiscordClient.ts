@@ -1,8 +1,13 @@
 import { Client, Events, GatewayIntentBits } from 'discord.js';
-import { Context, Effect, Layer, Redacted } from 'effect';
+import { Context, Effect, Layer, Redacted, Schema } from 'effect';
 
 import { discordBotToken } from '../config/env.js';
-import { DiscordError } from '../domain/errors.js';
+
+// Wraps any failure coming out of the Discord API / discord.js.
+export class DiscordError extends Schema.TaggedErrorClass<DiscordError>()('DiscordError', {
+    operation: Schema.String,
+    cause: Schema.Defect(),
+}) {}
 
 // Runs a discord.js / Discord REST promise inside Effect with a typed error.
 export const discordCall = <A>(
@@ -13,13 +18,6 @@ export const discordCall = <A>(
         try: run,
         catch: cause => DiscordError.make({ operation, cause }),
     });
-
-// The discord.js client as an Effect service. The layer logs in during
-// construction, waits until the gateway is ready, and destroys the client when
-// the application scope closes.
-export class DiscordClient extends Context.Service<DiscordClient, Client<true>>()(
-    'plazero/DiscordClient'
-) {}
 
 const acquireClient = Effect.gen(function* () {
     const token = yield* discordBotToken;
@@ -56,11 +54,18 @@ const acquireClient = Effect.gen(function* () {
     return client;
 });
 
-export const DiscordClientLive = Layer.effect(DiscordClient)(
-    Effect.acquireRelease(acquireClient, client =>
-        Effect.promise(() => client.destroy()).pipe(
-            Effect.ignore,
-            Effect.tap(() => Effect.logInfo('Discord client destroyed'))
+// The discord.js client as an Effect service. The layer logs in during
+// construction, waits until the gateway is ready, and destroys the client when
+// the application scope closes.
+export class DiscordClient extends Context.Service<DiscordClient, Client<true>>()(
+    'plazero/DiscordClient'
+) {
+    static readonly layer = Layer.effect(DiscordClient)(
+        Effect.acquireRelease(acquireClient, client =>
+            Effect.promise(() => client.destroy()).pipe(
+                Effect.ignore,
+                Effect.tap(() => Effect.logInfo('Discord client destroyed'))
+            )
         )
-    )
-);
+    );
+}

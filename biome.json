@@ -1,0 +1,73 @@
+{
+    "$schema": "https://biomejs.dev/schemas/2.5.5/schema.json",
+    "vcs": {
+        "enabled": true,
+        "clientKind": "git",
+        "useIgnoreFile": true
+    },
+    "files": {
+        "ignoreUnknown": true,
+        "includes": [
+            "**",
+            "!**/dist",
+            "!**/node_modules",
+            "!**/.repos",
+            "!**/.claude",
+            "!**/.agents",
+            "!**/backups",
+            "!**/package-lock.json"
+        ]
+    },
+    "formatter": {
+        "enabled": true,
+        "indentStyle": "space",
+        "indentWidth": 4,
+        "lineWidth": 100
+    },
+    "javascript": {
+        "formatter": {
+            "quoteStyle": "single",
+            "quoteProperties": "asNeeded",
+            "semicolons": "always",
+            "trailingCommas": "es5",
+            "arrowParentheses": "asNeeded",
+            "bracketSpacing": true
+        }
+    },
+    "linter": {
+        "enabled": true,
+        "rules": {
+            "preset": "recommended",
+            "correctness": {
+                "noUnusedVariables": "error",
+                "noUnusedFunctionParameters": "error",
+                "noUnusedImports": "error"
+            },
+            "style": {
+                "useNodejsImportProtocol": "error",
+                "useConst": "off",
+                "noUnusedTemplateLiteral": "off"
+            },
+            "suspicious": {
+                "noExplicitAny": "off"
+            }
+        }
+    },
+    "assist": {
+        "enabled": true,
+        "actions": {
+            "source": {
+                "organizeImports": {
+                    "level": "on",
+                    "options": {
+                        "groups": [
+                            [":URL:", ":NODE:", ":PACKAGE_WITH_PROTOCOL:", ":PACKAGE:"],
+                            ":BLANK_LINE:",
+                            [":ALIAS:", ":PATH:"]
+                        ]
+                    }
+                }
+            }
+        }
+    }
+}
