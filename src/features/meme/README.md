@@ -20,6 +20,8 @@ The meme competition system has been completely modernized with a modular archit
 
 **`/meme-contest [type] [duration]`** - Custom Contest Creation
 
+**`/meme-recover-contest`** - Admin-only winner backfill for the latest failed weekly contest. It scans the missing Friday-to-Friday period, saves and announces the winners, and is safe to retry.
+
 -   **Types**: `weekly` (Friday to Friday) or `yearly` (full year)
 -   **Custom Duration**: Use formats like `7d`, `30d`, `1y` for flexible periods
 -   **Moderator Only**: Requires moderator or admin permissions
@@ -88,7 +90,7 @@ The meme competition system has been completely modernized with a modular archit
 
 ## Automated Processing
 
-The bot automatically processes expired contests **every hour** and announces winners when contests end.
+The bot processes expired contests at startup and **every hour**, announces winners, and recreates a missing weekly contest from the latest contest channel.
 
 ### Automatic Contest Completion
 

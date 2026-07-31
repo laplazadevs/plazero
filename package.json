@@ -10,6 +10,7 @@
         "prepare": "./scripts/prepare-effect.sh",
         "lint": "biome check .",
         "lint:fix": "biome check --write .",
+        "test": "node --import tsx --test tests/**/*.test.ts",
         "format": "biome format .",
         "format:fix": "biome format --write .",
         "clean": "git clean -xdf --exclude=\".env*\" --exclude=\"backups\" --exclude=\".repos\" --exclude=\".vercel\"",

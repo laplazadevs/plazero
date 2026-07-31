@@ -9,12 +9,14 @@ import { type PlazeroUser, plazeroUserFromRow } from '../../domain/User.js';
 import { UserRepository } from '../../domain/UserRepository.js';
 import {
     BONE_EMOJI,
-    getCurrentFridayAtNoon,
-    getNextFridayAtNoon,
+    getWeeklyContestBackfillWindow,
+    getWeeklyContestWindow,
     LAUGH_EMOJIS,
     MEME_CHANNEL_NAME,
     type MemeContest,
     type MemeData,
+    type WeeklyContestBackfillResult,
+    type WeeklyContestRecoveryResult,
 } from './MemeDomain.js';
 import {
     createMemeContestButtonRow,
@@ -95,7 +97,7 @@ export const fetchMessagesInRange = Effect.fn('MemeManager.fetchMessagesInRange'
 
         for (const message of fetched.values()) {
             const messageDate = message.createdAt;
-            if (messageDate >= startDate && messageDate <= endDate) {
+            if (messageDate >= startDate && messageDate < endDate) {
                 messages.push(message);
             }
         }
@@ -195,6 +197,30 @@ export class MemeManager extends Context.Service<MemeManager>()('plazero/MemeMan
 
             return result;
         });
+
+        const getLatestWeeklyContest = Effect.fn('MemeManager.getLatestWeeklyContest')(
+            function* () {
+                const contestRow = yield* memeRepo.getLatestWeeklyContest();
+                if (!contestRow) return undefined;
+
+                const createdBy = yield* userRepo.getUser(contestRow.created_by_id);
+                if (!createdBy) return undefined;
+
+                return convertToMemeContest(contestRow, plazeroUserFromRow(createdBy));
+            }
+        );
+
+        const getLatestFailedWeeklyContest = Effect.fn('MemeManager.getLatestFailedWeeklyContest')(
+            function* () {
+                const contestRow = yield* memeRepo.getLatestFailedWeeklyContest();
+                if (!contestRow) return undefined;
+
+                const createdBy = yield* userRepo.getUser(contestRow.created_by_id);
+                if (!createdBy) return undefined;
+
+                return convertToMemeContest(contestRow, plazeroUserFromRow(createdBy));
+            }
+        );
 
         const updateContestMessageId = Effect.fn('MemeManager.updateContestMessageId')(function* (
             contestId: string,
@@ -344,59 +370,67 @@ export class MemeManager extends Context.Service<MemeManager>()('plazero/MemeMan
             }
         });
 
-        const createNextWeeklyContest = Effect.fn('MemeManager.createNextWeeklyContest')(function* (
-            completedContest: MemeContest
-        ) {
-            yield* Effect.logInfo(
-                `Creating next week's contest after completing ${completedContest.id}`
-            );
-
-            const nextStartDate = getCurrentFridayAtNoon().utc().toDate();
-            const nextEndDate = getNextFridayAtNoon().utc().toDate();
-
-            const activeContests = yield* getActiveContests();
-            const hasNextWeekContest = activeContests.some(contest => {
-                const contestStart = new Date(contest.startDate);
-                return (
-                    Math.abs(contestStart.getTime() - nextStartDate.getTime()) < 24 * 60 * 60 * 1000
+        const ensureCurrentWeeklyContest = Effect.fn('MemeManager.ensureCurrentWeeklyContest')(
+            function* (completedContest?: MemeContest) {
+                const activeContests = yield* getActiveContests();
+                const activeWeeklyContest = activeContests.find(
+                    contest => contest.type === 'weekly'
                 );
-            });
+                if (activeWeeklyContest) {
+                    const result: WeeklyContestRecoveryResult = {
+                        _tag: 'AlreadyActive',
+                        contest: activeWeeklyContest,
+                    };
+                    return result;
+                }
 
-            if (hasNextWeekContest) {
-                yield* Effect.logInfo('Next week contest already exists, skipping auto-creation');
-                return;
-            }
+                const previousContest = completedContest ?? (yield* getLatestWeeklyContest());
+                if (!previousContest) {
+                    yield* Effect.logWarning(
+                        'Cannot recover weekly contest: no contest history found'
+                    );
+                    const result: WeeklyContestRecoveryResult = { _tag: 'NoContestHistory' };
+                    return result;
+                }
 
-            const nextContest = yield* createContest(
-                'weekly',
-                nextStartDate,
-                nextEndDate,
-                completedContest.channelId,
-                client.user
-            );
+                const contestChannel = client.channels.cache.get(previousContest.channelId);
+                if (!contestChannel || !(contestChannel instanceof TextChannel)) {
+                    yield* Effect.logWarning(
+                        `Contest channel ${previousContest.channelId} not found for weekly recovery`
+                    );
+                    const result: WeeklyContestRecoveryResult = {
+                        _tag: 'ChannelUnavailable',
+                        channelId: previousContest.channelId,
+                    };
+                    return result;
+                }
 
-            const contestChannel = client.channels.cache.get(completedContest.channelId);
-            if (!contestChannel || !(contestChannel instanceof TextChannel)) {
-                yield* Effect.logWarning(
-                    `Contest channel ${completedContest.channelId} not found for next week announcement`
+                const window = getWeeklyContestWindow();
+                const contest = yield* createContest(
+                    'weekly',
+                    window.start.utc().toDate(),
+                    window.end.utc().toDate(),
+                    previousContest.channelId,
+                    client.user
                 );
-                return;
+                const embed = createMemeContestEmbed(contest);
+                const buttonRow = createMemeContestButtonRow(contest);
+
+                const message = yield* discordCall('channel.send', () =>
+                    contestChannel.send({
+                        content: '🎉 **¡Concurso semanal recuperado e iniciado automáticamente!**',
+                        embeds: [embed],
+                        components: [buttonRow],
+                    })
+                );
+
+                yield* updateContestMessageId(contest.id, message.id);
+                yield* Effect.logInfo(`Recovered weekly contest: ${contest.id}`);
+
+                const result: WeeklyContestRecoveryResult = { _tag: 'Created', contest };
+                return result;
             }
-
-            const embed = createMemeContestEmbed(nextContest);
-            const buttonRow = createMemeContestButtonRow(nextContest);
-
-            const message = yield* discordCall('channel.send', () =>
-                contestChannel.send({
-                    content: '🎉 **¡Nuevo concurso semanal iniciado automáticamente!**',
-                    embeds: [embed],
-                    components: [buttonRow],
-                })
-            );
-
-            yield* updateContestMessageId(nextContest.id, message.id);
-            yield* Effect.logInfo(`Auto-created next week's contest: ${nextContest.id}`);
-        });
+        );
 
         const processContest = Effect.fn('MemeManager.processContest')(function* (
             contest: MemeContest
@@ -415,39 +449,43 @@ export class MemeManager extends Context.Service<MemeManager>()('plazero/MemeMan
 
             if (messages.length === 0) {
                 yield* Effect.logInfo(`No messages found for contest ${contest.id}`);
-                yield* memeRepo.completeContest(contest.id);
-                return;
+                const completed = yield* completeContest(contest.id, []);
+                if (!completed) return;
+            } else {
+                const topMemes = yield* getTopMessages(messages, LAUGH_EMOJIS);
+                const topBones = yield* getTopMessages(messages, BONE_EMOJI);
+
+                const memeWinners = toWinners(
+                    topMemes,
+                    contest.id,
+                    'meme',
+                    contest.startDate,
+                    contest.endDate
+                );
+                const boneWinners = toWinners(
+                    topBones,
+                    contest.id,
+                    'bone',
+                    contest.startDate,
+                    contest.endDate
+                );
+
+                const completed = yield* completeContest(contest.id, [
+                    ...memeWinners,
+                    ...boneWinners,
+                ]);
+                if (!completed) return;
+
+                yield* announceWinners(contest, memeWinners, boneWinners);
+                yield* Effect.logInfo(
+                    `Contest ${contest.id} completed with ${memeWinners.length} meme winners and ${boneWinners.length} bone winners`
+                );
             }
 
-            const topMemes = yield* getTopMessages(messages, LAUGH_EMOJIS);
-            const topBones = yield* getTopMessages(messages, BONE_EMOJI);
-
-            const memeWinners = toWinners(
-                topMemes,
-                contest.id,
-                'meme',
-                contest.startDate,
-                contest.endDate
-            );
-            const boneWinners = toWinners(
-                topBones,
-                contest.id,
-                'bone',
-                contest.startDate,
-                contest.endDate
-            );
-
-            yield* completeContest(contest.id, [...memeWinners, ...boneWinners]);
-            yield* announceWinners(contest, memeWinners, boneWinners);
-
-            yield* Effect.logInfo(
-                `Contest ${contest.id} completed with ${memeWinners.length} meme winners and ${boneWinners.length} bone winners`
-            );
-
             if (contest.type === 'weekly') {
-                yield* createNextWeeklyContest(contest).pipe(
+                yield* ensureCurrentWeeklyContest(contest).pipe(
                     Effect.catchCause(cause =>
-                        Effect.logError("Error creating next week's contest:", cause)
+                        Effect.logError('Error recovering weekly contest:', cause)
                     )
                 );
             }
@@ -478,10 +516,100 @@ export class MemeManager extends Context.Service<MemeManager>()('plazero/MemeMan
             yield* processContest(contest);
         });
 
+        const recoverLatestWeeklyContest = Effect.fn('MemeManager.recoverLatestWeeklyContest')(
+            function* () {
+                yield* processExpiredContests();
+                return yield* ensureCurrentWeeklyContest();
+            }
+        );
+
+        const backfillLatestFailedWeeklyContest = Effect.fn(
+            'MemeManager.backfillLatestFailedWeeklyContest'
+        )(function* () {
+            const contest = yield* getLatestFailedWeeklyContest();
+            if (!contest) {
+                const result: WeeklyContestBackfillResult = { _tag: 'NoFailedContest' };
+                return result;
+            }
+
+            const window = getWeeklyContestBackfillWindow(contest.startDate);
+            if (window.end > new Date()) {
+                const result: WeeklyContestBackfillResult = {
+                    _tag: 'NotFinished',
+                    contest,
+                    endDate: window.end,
+                };
+                return result;
+            }
+
+            const memeChannel = findMemeChannel(client);
+            if (!memeChannel) {
+                yield* Effect.logWarning(
+                    `Meme channel not found while backfilling contest ${contest.id}`
+                );
+                const result: WeeklyContestBackfillResult = {
+                    _tag: 'MemeChannelUnavailable',
+                };
+                return result;
+            }
+
+            const messages = yield* fetchMessagesInRange(memeChannel, window.start, window.end);
+            const topMemes = yield* getTopMessages(messages, LAUGH_EMOJIS);
+            const topBones = yield* getTopMessages(messages, BONE_EMOJI);
+            const memeWinners = toWinners(topMemes, contest.id, 'meme', window.start, window.end);
+            const boneWinners = toWinners(topBones, contest.id, 'bone', window.start, window.end);
+            const winners = [...memeWinners, ...boneWinners];
+
+            for (const winner of winners) {
+                yield* userRepo.upsertUser(winner.author);
+            }
+
+            const backfill = yield* memeRepo.backfillWeeklyContest(
+                contest.id,
+                window.end,
+                winners.map(winner => ({
+                    id: winner.id,
+                    contest_id: contest.id,
+                    message_id: winner.message.id,
+                    author_id: winner.author.id,
+                    reaction_count: winner.reactionCount,
+                    contest_type: winner.contestType,
+                    rank: winner.rank ?? 0,
+                    week_start: winner.weekStart,
+                    week_end: winner.weekEnd,
+                    submitted_at: winner.submittedAt,
+                }))
+            );
+
+            if (!backfill.repaired) {
+                const result: WeeklyContestBackfillResult = { _tag: 'NoFailedContest' };
+                return result;
+            }
+
+            const recoveredContest: MemeContest = { ...contest, endDate: window.end };
+            yield* announceWinners(recoveredContest, memeWinners, boneWinners);
+            yield* Effect.logInfo(
+                `Backfilled contest ${contest.id} from ${window.start.toISOString()} to ${window.end.toISOString()} with ${backfill.insertedWinners} winners`
+            );
+
+            const result: WeeklyContestBackfillResult = {
+                _tag: 'Recovered',
+                contest: recoveredContest,
+                startDate: window.start,
+                endDate: window.end,
+                scannedMessages: messages.length,
+                memeWinners: memeWinners.length,
+                boneWinners: boneWinners.length,
+            };
+            return result;
+        });
+
         return {
             createContest,
             getContest,
             getActiveContests,
+            getLatestWeeklyContest,
+            getLatestFailedWeeklyContest,
             updateContestMessageId,
             completeContest,
             getContestMemes,
@@ -490,6 +618,8 @@ export class MemeManager extends Context.Service<MemeManager>()('plazero/MemeMan
             getStats,
             processExpiredContests,
             processSpecificContest,
+            recoverLatestWeeklyContest,
+            backfillLatestFailedWeeklyContest,
         } as const;
     }),
 }) {

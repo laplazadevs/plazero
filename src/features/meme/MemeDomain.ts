@@ -1,6 +1,11 @@
 import dayjs from 'dayjs';
+import timezone from 'dayjs/plugin/timezone.js';
+import utc from 'dayjs/plugin/utc.js';
 
 import type { PlazeroUser } from '../../domain/User.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 // Reference to a Discord message. Live discord.js `Message` objects satisfy
 // this shape; messages rebuilt from the database only carry the id.
@@ -33,6 +38,36 @@ export interface MemeContest {
     messageId?: string;
     createdBy: PlazeroUser;
     createdAt: Date;
+}
+
+export type WeeklyContestRecoveryResult =
+    | { readonly _tag: 'Created'; readonly contest: MemeContest }
+    | { readonly _tag: 'AlreadyActive'; readonly contest: MemeContest }
+    | { readonly _tag: 'NoContestHistory' }
+    | { readonly _tag: 'ChannelUnavailable'; readonly channelId: string };
+
+export type WeeklyContestBackfillResult =
+    | {
+          readonly _tag: 'Recovered';
+          readonly contest: MemeContest;
+          readonly startDate: Date;
+          readonly endDate: Date;
+          readonly scannedMessages: number;
+          readonly memeWinners: number;
+          readonly boneWinners: number;
+      }
+    | { readonly _tag: 'NoFailedContest' }
+    | { readonly _tag: 'NotFinished'; readonly contest: MemeContest; readonly endDate: Date }
+    | { readonly _tag: 'MemeChannelUnavailable' };
+
+export interface WeeklyContestWindow {
+    readonly start: dayjs.Dayjs;
+    readonly end: dayjs.Dayjs;
+}
+
+export interface WeeklyContestBackfillWindow {
+    readonly start: Date;
+    readonly end: Date;
 }
 
 // Emoji configurations
@@ -71,35 +106,43 @@ export const MEME_OF_THE_YEAR_COMMAND = 'meme-of-the-year';
 export const MEME_STATS_COMMAND = 'meme-stats';
 export const MEME_CONTEST_COMMAND = 'meme-contest';
 export const MEME_COMPLETE_CONTEST_COMMAND = 'meme-complete-contest';
+export const MEME_RECOVER_CONTEST_COMMAND = 'meme-recover-contest';
+
+/**
+ * Returns the Friday-noon window containing the provided Bogota instant.
+ * Deriving the end from the start guarantees a full seven-day contest,
+ * including when recovery runs before noon on a Friday.
+ */
+export function getWeeklyContestWindow(
+    now: dayjs.Dayjs = dayjs().tz('America/Bogota')
+): WeeklyContestWindow {
+    const fridayAtNoon = now.day(5).hour(12).minute(0).second(0).millisecond(0);
+    const start = now.isBefore(fridayAtNoon) ? fridayAtNoon.subtract(1, 'week') : fridayAtNoon;
+
+    return { start, end: start.add(1, 'week') };
+}
+
+/**
+ * Expands the start stored by the zero-duration contest bug into the full
+ * Friday-to-Friday period whose winners need to be recovered.
+ */
+export function getWeeklyContestBackfillWindow(startDate: Date): WeeklyContestBackfillWindow {
+    const start = dayjs(startDate);
+    return { start: start.toDate(), end: start.add(1, 'week').toDate() };
+}
 
 /**
  * Get the current week's Friday at noon in Bogota timezone
  */
 export function getCurrentFridayAtNoon(): dayjs.Dayjs {
-    const now = dayjs().tz('America/Bogota');
-    const friday = now.day(5).hour(12).minute(0).second(0).millisecond(0);
-
-    // If today is past Friday, we need to get this week's Friday (which already passed)
-    // If today is before Friday, we get this week's Friday (which is coming)
-    // If today is Friday but before noon, we get today's noon
-    // If today is Friday and past noon, we get today's noon (but it already passed)
-
-    return friday;
+    return getWeeklyContestWindow().start;
 }
 
 /**
  * Get the next Friday at noon in Bogota timezone
  */
 export function getNextFridayAtNoon(): dayjs.Dayjs {
-    const now = dayjs().tz('America/Bogota');
-    let nextFriday = now.day(5).hour(12).minute(0).second(0).millisecond(0);
-
-    // If it's already Friday and past noon, or if it's past Friday, get next week's Friday
-    if ((now.day() === 5 && now.hour() >= 12) || now.day() > 5) {
-        nextFriday = nextFriday.add(1, 'week');
-    }
-
-    return nextFriday;
+    return getWeeklyContestWindow().end;
 }
 
 /**
@@ -109,8 +152,8 @@ export function isValidContestDateRange(startDate: Date, endDate: Date): boolean
     const start = dayjs(startDate);
     const end = dayjs(endDate);
 
-    // End date must be after start date
-    if (end.isBefore(start)) return false;
+    // End date must be strictly after start date.
+    if (!end.isAfter(start)) return false;
 
     // Contest duration should not exceed 1 year
     if (end.diff(start, 'year') > 1) return false;

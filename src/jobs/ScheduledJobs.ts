@@ -33,7 +33,7 @@ const voteSweepTick = Effect.fn('jobs.voteSweep')(function* () {
 const contestCompletionTick = Effect.fn('jobs.contestCompletion')(function* () {
     yield* Effect.logInfo('Checking for expired contests...');
     const memeManager = yield* MemeManager;
-    yield* memeManager.processExpiredContests();
+    yield* memeManager.recoverLatestWeeklyContest();
 });
 
 // Replaces the every-minute turno-notification CronJob.
@@ -93,6 +93,14 @@ const runOnSchedule = <E, R, Out, ScheduleError>(
 // the application layer and are interrupted on shutdown.
 export const ScheduledJobsLive = Layer.effectDiscard(
     Effect.gen(function* () {
+        // Recover a missing weekly contest immediately on startup instead of
+        // waiting until the next hourly cron boundary.
+        yield* contestCompletionTick().pipe(
+            Effect.catchCause(cause =>
+                Effect.logError('Error in initial scheduled job contestCompletion:', cause)
+            )
+        );
+
         yield* runOnSchedule('voteSweep', voteSweepTick(), Schedule.spaced('30 seconds'));
         yield* runOnSchedule(
             'contestCompletion',

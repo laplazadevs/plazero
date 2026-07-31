@@ -42,6 +42,10 @@ export class MemeTotalsRow extends Schema.Class<MemeTotalsRow>('MemeTotalsRow')(
     total_bones: Schema.NullOr(Schema.FiniteFromString),
 }) {}
 
+class MemeWinnerIdRow extends Schema.Class<MemeWinnerIdRow>('MemeWinnerIdRow')({
+    id: Schema.String,
+}) {}
+
 export interface MemeWinnerInsert {
     readonly id: string;
     readonly contest_id: string;
@@ -60,6 +64,7 @@ const decodeWinnerRows = Schema.decodeUnknownEffect(Schema.Array(MemeWinnerRow))
 const decodeTopContributorRows = Schema.decodeUnknownEffect(Schema.Array(TopContributorRow));
 const decodeCountRows = Schema.decodeUnknownEffect(Schema.Array(CountRow));
 const decodeTotalsRows = Schema.decodeUnknownEffect(Schema.Array(MemeTotalsRow));
+const decodeWinnerIdRows = Schema.decodeUnknownEffect(Schema.Array(MemeWinnerIdRow));
 
 export class MemeRepository extends Context.Service<MemeRepository>()('plazero/MemeRepository', {
     make: Effect.gen(function* () {
@@ -104,6 +109,34 @@ export class MemeRepository extends Context.Service<MemeRepository>()('plazero/M
         const getActiveContests = Effect.fn('MemeRepository.getActiveContests')(function* () {
             const rows = yield* sql`SELECT * FROM meme_contests WHERE status = 'active'`;
             return yield* decodeContestRows(rows);
+        });
+
+        const getLatestWeeklyContest = Effect.fn('MemeRepository.getLatestWeeklyContest')(
+            function* () {
+                const rows = yield* sql`
+                    SELECT * FROM meme_contests
+                    WHERE type = 'weekly'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                `;
+                const contests = yield* decodeContestRows(rows);
+                return contests.length > 0 ? contests[0] : null;
+            }
+        );
+
+        const getLatestFailedWeeklyContest = Effect.fn(
+            'MemeRepository.getLatestFailedWeeklyContest'
+        )(function* () {
+            const rows = yield* sql`
+                SELECT * FROM meme_contests
+                WHERE type = 'weekly'
+                  AND status = 'completed'
+                  AND end_date <= start_date
+                ORDER BY created_at DESC
+                LIMIT 1
+            `;
+            const contests = yield* decodeContestRows(rows);
+            return contests.length > 0 ? contests[0] : null;
         });
 
         const updateContestMessageId = Effect.fn('MemeRepository.updateContestMessageId')(
@@ -189,6 +222,93 @@ export class MemeRepository extends Context.Service<MemeRepository>()('plazero/M
             yield* Effect.logDebug(`addMemeWinners: inserted ${winners.length} winners`);
         });
 
+        // Repairs a contest produced by the historical zero-duration bug and
+        // inserts only previously missing winners. Stats are incremented from
+        // INSERT ... RETURNING rows, making retries safe.
+        const backfillWeeklyContest = Effect.fn('MemeRepository.backfillWeeklyContest')(function* (
+            contestId: string,
+            recoveredEndDate: Date,
+            winners: ReadonlyArray<MemeWinnerInsert>
+        ) {
+            return yield* sql.withTransaction(
+                Effect.gen(function* () {
+                    const repairedRows = yield* sql`
+                        UPDATE meme_contests
+                        SET end_date = ${recoveredEndDate}
+                        WHERE id = ${contestId}
+                          AND type = 'weekly'
+                          AND status = 'completed'
+                          AND end_date <= start_date
+                        RETURNING id
+                    `;
+                    const repaired = yield* decodeWinnerIdRows(repairedRows);
+                    if (repaired.length === 0) {
+                        return { repaired: false, insertedWinners: 0 } as const;
+                    }
+
+                    const authorIds = [...new Set(winners.map(winner => winner.author_id))];
+                    for (const authorId of authorIds) {
+                        yield* users.ensureUserId(authorId);
+                    }
+
+                    const insertedWinners: MemeWinnerInsert[] = [];
+                    for (const winner of winners) {
+                        const insertedRows = yield* sql`
+                            INSERT INTO meme_winners (
+                                id, contest_id, message_id, author_id, reaction_count,
+                                contest_type, rank, week_start, week_end, submitted_at
+                            )
+                            VALUES (
+                                ${winner.id}, ${winner.contest_id}, ${winner.message_id},
+                                ${winner.author_id}, ${winner.reaction_count},
+                                ${winner.contest_type}, ${winner.rank}, ${winner.week_start},
+                                ${winner.week_end}, ${winner.submitted_at}
+                            )
+                            ON CONFLICT (id) DO NOTHING
+                            RETURNING id
+                        `;
+                        const inserted = yield* decodeWinnerIdRows(insertedRows);
+                        if (inserted.length > 0) {
+                            insertedWinners.push(winner);
+                        }
+                    }
+
+                    const statsByUser = new Map<string, { memeWins: number; boneWins: number }>();
+                    for (const winner of insertedWinners) {
+                        const stats = statsByUser.get(winner.author_id) ?? {
+                            memeWins: 0,
+                            boneWins: 0,
+                        };
+                        if (winner.contest_type === 'meme') {
+                            stats.memeWins += 1;
+                        } else {
+                            stats.boneWins += 1;
+                        }
+                        statsByUser.set(winner.author_id, stats);
+                    }
+
+                    for (const [userId, stats] of statsByUser.entries()) {
+                        yield* sql`
+                            INSERT INTO user_stats (
+                                user_id, total_meme_wins, total_bone_wins, updated_at
+                            )
+                            VALUES (${userId}, ${stats.memeWins}, ${stats.boneWins}, NOW())
+                            ON CONFLICT (user_id)
+                            DO UPDATE SET
+                                total_meme_wins = user_stats.total_meme_wins + ${stats.memeWins},
+                                total_bone_wins = user_stats.total_bone_wins + ${stats.boneWins},
+                                updated_at = NOW()
+                        `;
+                    }
+
+                    return {
+                        repaired: true,
+                        insertedWinners: insertedWinners.length,
+                    } as const;
+                })
+            );
+        });
+
         const getContestWinners = Effect.fn('MemeRepository.getContestWinners')(function* (
             contestId: string
         ) {
@@ -250,9 +370,12 @@ export class MemeRepository extends Context.Service<MemeRepository>()('plazero/M
             createContest,
             getContest,
             getActiveContests,
+            getLatestWeeklyContest,
+            getLatestFailedWeeklyContest,
             updateContestMessageId,
             completeContest,
             addMemeWinners,
+            backfillWeeklyContest,
             getContestWinners,
             getTopContributors,
             getMemeStats,

@@ -178,7 +178,7 @@ Six supervised fibers, started by `ScheduledJobsLive`, all in `America/Bogota`. 
 | Job | Schedule | Does |
 |---|---|---|
 | `voteSweep` | every 30 s | completes expired votes, refreshes live embeds |
-| `contestCompletion` | `0 * * * *` (hourly) | closes finished meme contests, announces winners |
+| `contestCompletion` | startup + `0 * * * *` (hourly) | closes finished meme contests and recovers a missing weekly contest |
 | `turnoNotifications` | `* * * * *` (every minute) | corabastos turno reminders (channel + DM) |
 | `weeklySessionCreation` | `0 0 * * 6` (Sat 00:00) | schedules the week's corabastos session |
 | `databaseCleanup` | every 1 h | runs `run_all_cleanup()` in Postgres |
@@ -194,6 +194,7 @@ Six supervised fibers, started by `ScheduledJobsLive`, all in `America/Bogota`. 
 | `/meme-stats` | 🤣 meme | everyone |
 | `/meme-contest <type> [duration]` | 🤣 meme | moderators |
 | `/meme-complete-contest <contest-id>` | 🤣 meme | admins |
+| `/meme-recover-contest` | 🤣 backfills and announces the latest missing weekly winners | admins |
 | `/corabastos-agenda agregar <turno> <tema> [descripcion]` | 🇨🇴 corabastos | everyone |
 | `/corabastos-agenda ver` | 🇨🇴 corabastos | everyone |
 | `/corabastos-emergencia <razon> <paciente>` | 🇨🇴 corabastos | everyone |
