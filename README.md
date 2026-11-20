@@ -124,7 +124,8 @@ Every discord.js promise crosses into Effect through one four-line helper — `d
 
 ```mermaid
 flowchart LR
-    A(["npm start"]) --> B["Load .env via<br/>ConfigProvider"]
+    A(["npm start"]) --> H["Health server<br/>GET /health on PORT"]
+    H --> B["Load .env via<br/>ConfigProvider"]
     B --> C["Connect pg pool<br/>(verified with SELECT 1)"]
     C --> D["Migrations.boot<br/>apply pending SQL"]
     D --> E["Discord login<br/>+ wait for ClientReady"]
@@ -215,7 +216,10 @@ npm run dev        # migrate → register commands → run the bot with tsx
 | `npm run build` | TypeScript 7 native compile — the whole app in ~0.5 s |
 | `npm run lint` / `lint:fix` | Biome: lint + format + import order, one tool |
 | `npm run migrate:status` | migration table vs. `src/migrations/*.sql` |
-| `npm start` | production: build → migrate → register → run |
+| `npm run typecheck` | bot, tests and Cloudflare Worker |
+| `npm test` | node:test suite |
+| `npm start` | production: build → register → run (migrations run at boot) |
+| `npx wrangler deploy` | manual Cloudflare Containers deploy (`wrangler.jsonc`, `Dockerfile`) |
 
 <details>
 <summary><b>🔐 Environment variables</b></summary>

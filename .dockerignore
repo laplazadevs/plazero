@@ -1,0 +1,12 @@
+.env*
+.git
+.repos
+.claude
+.agents
+.wrangler
+node_modules
+dist
+backups
+tests
+cloudflare
+api

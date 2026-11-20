@@ -4,7 +4,7 @@ import * as NodeServices from '@effect/platform-node/NodeServices';
 import { Console, Effect, Layer } from 'effect';
 
 import { DotEnvConfigProviderLive } from '../config/AppConfigProvider.js';
-import { targetDatabaseName } from '../config/env.js';
+import { hasDatabaseUrl, targetDatabaseName } from '../config/env.js';
 import { ensureDatabaseExists, Migrations } from '../db/Migrations.js';
 import { PgLive } from '../db/PgLive.js';
 
@@ -90,9 +90,9 @@ const main = Effect.gen(function* () {
             yield* ensureDatabaseExists().pipe(Effect.provide(AdminLive));
             break;
         case 'up':
-            // The database may not exist yet, so it is created through the
-            // admin connection before the migration layer connects to it.
-            yield* ensureDatabaseExists().pipe(Effect.provide(AdminLive));
+            if (!(yield* hasDatabaseUrl.pipe(Effect.provide(AdminLive)))) {
+                yield* ensureDatabaseExists().pipe(Effect.provide(AdminLive));
+            }
             yield* runUp.pipe(Effect.provide(MigrateLive));
             break;
         case 'status':

@@ -6,12 +6,14 @@ export const discordBotToken = Config.redacted('DISCORD_BOT_TOKEN');
 export const discordClientId = Config.string('CLIENT_ID');
 export const discordGuildId = Config.string('GUILD_ID');
 
-// Pool tuning mirrors the previous pg.Pool settings (max 20, 30s idle, 2s connect).
-const poolTuning = {
-    maxConnections: 20,
-    idleTimeout: Duration.seconds(30),
-    connectTimeout: Duration.seconds(2),
-};
+const poolTuning = Config.int('DB_CONNECT_TIMEOUT_MS').pipe(
+    Config.withDefault(10_000),
+    Config.map(connectTimeoutMs => ({
+        maxConnections: 20,
+        idleTimeout: Duration.seconds(30),
+        connectTimeout: Duration.millis(connectTimeoutMs),
+    }))
+);
 
 // The bot holds a persistent pool, so Neon's direct (unpooled) URL is
 // preferred when present; the pooled DATABASE_URL remains the fallback.
@@ -39,6 +41,8 @@ const databasePassword = Config.redacted('DB_PASSWORD').pipe(
     Config.withDefault(Redacted.make('password'))
 );
 
+export const hasDatabaseUrl = databaseUrl.pipe(Config.map(Option.isSome));
+
 const databaseHost = Config.string('DB_HOST').pipe(Config.withDefault('localhost'));
 
 const databasePort = Config.int('DB_PORT').pipe(Config.withDefault(5432));
@@ -49,7 +53,7 @@ export const databasePoolConfig: Effect.Effect<PgPoolConfig, Config.ConfigError>
         const url = yield* databaseUrl;
 
         if (Option.isSome(url)) {
-            return { url: url.value, ...poolTuning };
+            return { url: url.value, ...(yield* poolTuning) };
         }
 
         return {
@@ -58,7 +62,7 @@ export const databasePoolConfig: Effect.Effect<PgPoolConfig, Config.ConfigError>
             database: yield* databaseName,
             username: yield* databaseUser,
             password: yield* databasePassword,
-            ...poolTuning,
+            ...(yield* poolTuning),
         };
     }
 );
@@ -98,7 +102,7 @@ export const adminPoolConfig: Effect.Effect<PgPoolConfig, Config.ConfigError> = 
             );
             if (Option.isSome(parsed)) {
                 parsed.value.pathname = '/postgres';
-                return { url: Redacted.make(parsed.value.toString()), ...poolTuning };
+                return { url: Redacted.make(parsed.value.toString()), ...(yield* poolTuning) };
             }
         }
 
@@ -108,7 +112,7 @@ export const adminPoolConfig: Effect.Effect<PgPoolConfig, Config.ConfigError> = 
             database: 'postgres',
             username: yield* databaseUser,
             password: yield* databasePassword,
-            ...poolTuning,
+            ...(yield* poolTuning),
         };
     }
 );

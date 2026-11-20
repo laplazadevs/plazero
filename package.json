@@ -8,6 +8,7 @@
     },
     "scripts": {
         "prepare": "./scripts/prepare-effect.sh",
+        "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tests/tsconfig.json && tsc -p cloudflare/tsconfig.json",
         "lint": "biome check .",
         "lint:fix": "biome check --write .",
         "test": "node --import tsx --test tests/**/*.test.ts",
@@ -18,7 +19,7 @@
         "build": "tsc --project tsconfig.json && npm run copy-migrations",
         "copy-migrations": "mkdir -p dist/migrations && cp src/migrations/*.sql dist/migrations/",
         "register-commands": "node dist/register-commands.js",
-        "start": "npm run build && npm run migrate:up:prod && npm run register-commands && npm run start:bot",
+        "start": "npm run build && npm run register-commands && npm run start:bot",
         "start:bot": "node --enable-source-maps dist/main.js",
         "start:production": "npm run start",
         "dev": "npm run migrate:up && tsx src/register-commands.ts && tsx src/main.ts",
@@ -37,8 +38,10 @@
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.5",
+        "@cloudflare/workers-types": "^5.20261120.1",
         "tsx": "^4.23.1",
-        "typescript": "^7.0.2"
+        "typescript": "^7.0.2",
+        "wrangler": "^4.166.0"
     },
     "dependencies": {
         "@discordjs/builders": "^1.14.1",

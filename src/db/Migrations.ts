@@ -166,13 +166,13 @@ export class Migrations extends Context.Service<Migrations>()('plazero/Migration
 }) {
     static readonly layer = Layer.effect(Migrations)(Migrations.make);
 
-    // Startup layer: runs pending migrations while the application layers are
-    // being built, gating anything provided on top of it (the Discord login).
     static readonly boot = Layer.effectDiscard(
         Effect.gen(function* () {
             const migrations = yield* Migrations;
+            yield* Effect.logInfo('Migrations starting');
             yield* migrations.up();
-        })
+            yield* Effect.logInfo('Migrations ok');
+        }).pipe(Effect.tapCause(cause => Effect.logError('Migrations failed', cause)))
     );
 }
 
@@ -195,12 +195,3 @@ export const ensureDatabaseExists = Effect.fn('Migrations.ensureDatabaseExists')
         }
     }).pipe(Effect.scoped, Effect.provide(Reactivity.layer));
 });
-
-// Startup layer: runs pending migrations while the application layers are
-// being built, replacing the old DatabaseService.initializeSchema().
-export const MigrationsBoot = Layer.effectDiscard(
-    Effect.gen(function* () {
-        const migrations = yield* Migrations;
-        yield* migrations.up();
-    })
-);

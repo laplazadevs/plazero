@@ -1,0 +1,35 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "plazero",
+    "main": "cloudflare/worker.ts",
+    "compatibility_date": "2026-10-01",
+    "containers": [
+        {
+            "class_name": "PlazeroContainer",
+            "image": "./Dockerfile",
+            "instance_type": "basic",
+            "max_instances": 1
+        }
+    ],
+    "durable_objects": {
+        "bindings": [{ "name": "PLAZERO_CONTAINER", "class_name": "PlazeroContainer" }]
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PlazeroContainer"] }],
+    "triggers": { "crons": ["* * * * *"] },
+    "observability": {
+        "logs": {
+            "enabled": true,
+            "head_sampling_rate": 1,
+            "invocation_logs": true,
+            "persist": true
+        },
+        "traces": {
+            "enabled": false,
+            "head_sampling_rate": 1,
+            "persist": true
+        },
+        "issue_detection": {
+            "enabled": false
+        }
+    }
+}

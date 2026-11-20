@@ -52,7 +52,7 @@ const acquireClient = Effect.gen(function* () {
     }
 
     return client;
-});
+}).pipe(Effect.tapCause(cause => Effect.logError('Discord login failed', cause)));
 
 // The discord.js client as an Effect service. The layer logs in during
 // construction, waits until the gateway is ready, and destroys the client when
