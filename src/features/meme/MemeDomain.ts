@@ -43,32 +43,47 @@ export interface MemeContest {
 export type WeeklyContestRecoveryResult =
     | { readonly _tag: 'Created'; readonly contest: MemeContest }
     | { readonly _tag: 'AlreadyActive'; readonly contest: MemeContest }
-    | { readonly _tag: 'NoContestHistory' }
-    | { readonly _tag: 'ChannelUnavailable'; readonly channelId: string };
-
-export type WeeklyContestBackfillResult =
-    | {
-          readonly _tag: 'Recovered';
-          readonly contest: MemeContest;
-          readonly startDate: Date;
-          readonly endDate: Date;
-          readonly scannedMessages: number;
-          readonly memeWinners: number;
-          readonly boneWinners: number;
-      }
-    | { readonly _tag: 'NoFailedContest' }
-    | { readonly _tag: 'NotFinished'; readonly contest: MemeContest; readonly endDate: Date }
-    | { readonly _tag: 'MemeChannelUnavailable' };
+    | { readonly _tag: 'ChannelUnavailable' };
 
 export interface WeeklyContestWindow {
     readonly start: dayjs.Dayjs;
     readonly end: dayjs.Dayjs;
 }
 
-export interface WeeklyContestBackfillWindow {
+export interface ContestWindow {
     readonly start: Date;
     readonly end: Date;
 }
+
+export type RecoveredWeekStatus =
+    | { readonly _tag: 'Recoverable' }
+    | { readonly _tag: 'NoMessages' }
+    | { readonly _tag: 'NoReactions' };
+
+export interface RankedEntry {
+    readonly url: string;
+    readonly authorId: string;
+    readonly count: number;
+}
+
+export interface RecoveredWeek {
+    readonly window: ContestWindow;
+    readonly messageCount: number;
+    readonly topMemes: ReadonlyArray<RankedEntry>;
+    readonly topBones: ReadonlyArray<RankedEntry>;
+    readonly status: RecoveredWeekStatus;
+    readonly savedWinners?: number;
+}
+
+export type MissedContestsResult =
+    | { readonly _tag: 'MemeChannelUnavailable' }
+    | {
+          readonly _tag: 'Scanned';
+          readonly from: Date;
+          readonly weeks: ReadonlyArray<RecoveredWeek>;
+          readonly confirm: boolean;
+          readonly announce: boolean;
+      };
 
 // Emoji configurations
 export const LAUGH_EMOJIS = [
@@ -106,7 +121,12 @@ export const MEME_OF_THE_YEAR_COMMAND = 'meme-of-the-year';
 export const MEME_STATS_COMMAND = 'meme-stats';
 export const MEME_CONTEST_COMMAND = 'meme-contest';
 export const MEME_COMPLETE_CONTEST_COMMAND = 'meme-complete-contest';
-export const MEME_RECOVER_CONTEST_COMMAND = 'meme-recover-contest';
+export const MEME_RECOVER_COMMAND = 'meme-recover';
+
+export const RECOVERY_FALLBACK_START = new Date('2026-10-16T17:00:00.000Z');
+
+export const winnerId = (contestType: 'meme' | 'bone', contestId: string, index: number) =>
+    `${contestType}-${contestId}-${index}`;
 
 /**
  * Returns the Friday-noon window containing the provided Bogota instant.
@@ -122,14 +142,33 @@ export function getWeeklyContestWindow(
     return { start, end: start.add(1, 'week') };
 }
 
-/**
- * Expands the start stored by the zero-duration contest bug into the full
- * Friday-to-Friday period whose winners need to be recovered.
- */
-export function getWeeklyContestBackfillWindow(startDate: Date): WeeklyContestBackfillWindow {
-    const start = dayjs(startDate);
-    return { start: start.toDate(), end: start.add(1, 'week').toDate() };
+export function getMissedWeeklyWindows(from: Date, now: Date): ContestWindow[] {
+    const windows: ContestWindow[] = [];
+    let { start, end } = getWeeklyContestWindow(dayjs(from).tz('America/Bogota'));
+    while (!end.isAfter(now)) {
+        windows.push({ start: start.toDate(), end: end.toDate() });
+        start = end;
+        end = end.add(1, 'week');
+    }
+    return windows;
 }
+
+export const getRecoveryStart = (
+    latest: { readonly status: string; readonly start_date: Date; readonly end_date: Date } | null
+): Date => {
+    if (!latest) return RECOVERY_FALLBACK_START;
+    return latest.status !== 'active' && latest.end_date > latest.start_date
+        ? latest.end_date
+        : latest.start_date;
+};
+
+export const classifyRecoveredWeek = (
+    messageCount: number,
+    winnerCount: number
+): RecoveredWeekStatus => {
+    if (winnerCount > 0) return { _tag: 'Recoverable' };
+    return messageCount === 0 ? { _tag: 'NoMessages' } : { _tag: 'NoReactions' };
+};
 
 /**
  * Get the current week's Friday at noon in Bogota timezone
@@ -160,3 +199,59 @@ export function isValidContestDateRange(startDate: Date, endDate: Date): boolean
 
     return true;
 }
+
+const DISCORD_MESSAGE_LIMIT = 2000;
+
+const unix = (date: Date) => Math.floor(date.getTime() / 1000);
+
+const statusLabel: Record<RecoveredWeekStatus['_tag'], string> = {
+    Recoverable: '✅ recuperable',
+    NoMessages: '❌ no recuperable: no hay mensajes en el canal',
+    NoReactions: '❌ no recuperable: hay mensajes pero ninguno tiene reacciones válidas',
+};
+
+const entryLines = (emoji: string, entries: ReadonlyArray<RankedEntry>) =>
+    entries.map(
+        (entry, index) =>
+            `  ${emoji} ${index + 1}. <@${entry.authorId}> (${entry.count}) <${entry.url}>`
+    );
+
+export const chunkLines = (lines: ReadonlyArray<string>, limit = DISCORD_MESSAGE_LIMIT) => {
+    const chunks: string[] = [];
+    let current = '';
+    for (const line of lines) {
+        const safe = line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
+        if (current && current.length + 1 + safe.length > limit) {
+            chunks.push(current);
+            current = safe;
+        } else {
+            current = current ? `${current}\n${safe}` : safe;
+        }
+    }
+    if (current) chunks.push(current);
+    return chunks;
+};
+
+export const formatRecoveryReport = (
+    result: Extract<MissedContestsResult, { _tag: 'Scanned' }>
+): string[] => {
+    const mode = !result.confirm
+        ? '🔎 **Simulación**: no se guardó ni se anunció nada.'
+        : result.announce
+          ? '💾 **Guardado y anunciado.**'
+          : '💾 **Guardado** (sin anunciar).';
+    const recoverable = result.weeks.filter(week => week.status._tag === 'Recoverable').length;
+    const header = [
+        mode,
+        `Desde <t:${unix(result.from)}:f>: ${result.weeks.length} viernes sin cerrar, ${recoverable} recuperables.`,
+    ];
+    const weeks = result.weeks.flatMap(week => [
+        `**<t:${unix(week.window.start)}:f> → <t:${unix(week.window.end)}:f>** · ${week.messageCount} mensajes · ${statusLabel[week.status._tag]}` +
+            (week.savedWinners === undefined
+                ? ''
+                : ` · ${week.savedWinners} ganadores nuevos guardados`),
+        ...entryLines('😂', week.topMemes),
+        ...entryLines('🦴', week.topBones),
+    ]);
+    return chunkLines([...header, ...weeks]);
+};

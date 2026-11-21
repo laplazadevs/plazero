@@ -24,14 +24,14 @@ import {
     handleMemeCompleteContestCommand,
     handleMemeContestCommand,
     handleMemeOfTheYearCommand,
-    handleMemeRecoverContestCommand,
+    handleMemeRecoverCommand,
     handleMemeStatsCommand,
 } from '../features/meme/MemeCommands.js';
 import {
     MEME_COMPLETE_CONTEST_COMMAND,
     MEME_CONTEST_COMMAND,
     MEME_OF_THE_YEAR_COMMAND,
-    MEME_RECOVER_CONTEST_COMMAND,
+    MEME_RECOVER_COMMAND,
     MEME_STATS_COMMAND,
 } from '../features/meme/MemeDomain.js';
 import { handleMemeButtonInteraction } from '../features/meme/MemeInteractions.js';
@@ -72,8 +72,8 @@ const dispatchInteraction = Effect.fn('dispatchInteraction')(function* (interact
             case MEME_COMPLETE_CONTEST_COMMAND:
                 yield* handleMemeCompleteContestCommand(interaction);
                 break;
-            case MEME_RECOVER_CONTEST_COMMAND:
-                yield* handleMemeRecoverContestCommand(interaction);
+            case MEME_RECOVER_COMMAND:
+                yield* handleMemeRecoverCommand(interaction);
                 break;
             case VOTE_TIMEOUT_COMMAND:
                 yield* handleVoteTimeoutCommand(interaction);

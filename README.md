@@ -195,7 +195,7 @@ Six supervised fibers, started by `ScheduledJobsLive`, all in `America/Bogota`. 
 | `/meme-stats` | 🤣 meme | everyone |
 | `/meme-contest <type> [duration]` | 🤣 meme | moderators |
 | `/meme-complete-contest <contest-id>` | 🤣 meme | admins |
-| `/meme-recover-contest` | 🤣 backfills and announces the latest missing weekly winners | admins |
+| `/meme-recover` | 🤣 dry-runs, saves (`confirm`) or announces (`announce`) every weekly contest that was never closed | admins |
 | `/corabastos-agenda agregar <turno> <tema> [descripcion]` | 🇨🇴 corabastos | everyone |
 | `/corabastos-agenda ver` | 🇨🇴 corabastos | everyone |
 | `/corabastos-emergencia <razon> <paciente>` | 🇨🇴 corabastos | everyone |

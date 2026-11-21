@@ -5,6 +5,7 @@ import { Effect } from 'effect';
 
 import { discordCall } from '../../discord/DiscordClient.js';
 import {
+    formatRecoveryReport,
     getWeeklyContestWindow,
     isValidContestDateRange,
     LAUGH_EMOJIS,
@@ -12,7 +13,7 @@ import {
     MEME_COMPLETE_CONTEST_COMMAND,
     MEME_CONTEST_COMMAND,
     MEME_OF_THE_YEAR_COMMAND,
-    MEME_RECOVER_CONTEST_COMMAND,
+    MEME_RECOVER_COMMAND,
     MEME_STATS_COMMAND,
 } from './MemeDomain.js';
 import {
@@ -340,77 +341,68 @@ export const handleMemeCompleteContestCommand = Effect.fn('handleMemeCompleteCon
     }
 );
 
-export const handleMemeRecoverContestCommand = Effect.fn('handleMemeRecoverContestCommand')(
-    function* (interaction: ChatInputCommandInteraction) {
-        const memeManager = yield* MemeManager;
+export const handleMemeRecoverCommand = Effect.fn('handleMemeRecoverCommand')(function* (
+    interaction: ChatInputCommandInteraction
+) {
+    const memeManager = yield* MemeManager;
+    const confirm = interaction.options.getBoolean('confirm') ?? false;
+    const announce = interaction.options.getBoolean('announce') ?? false;
 
-        if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-            yield* discordCall('interaction.reply', () =>
-                interaction.reply({
-                    content: '❌ Solo los administradores pueden usar este comando.',
-                    ephemeral: true,
-                })
-            );
-            return;
-        }
-
-        yield* discordCall('interaction.deferReply', () =>
-            interaction.deferReply({ ephemeral: true })
-        );
-
-        yield* memeManager.backfillLatestFailedWeeklyContest().pipe(
-            Effect.matchCauseEffect({
-                onFailure: cause =>
-                    Effect.gen(function* () {
-                        yield* Effect.logError('Error in handleMemeRecoverContestCommand:', cause);
-                        yield* discordCall('interaction.editReply', () =>
-                            interaction.editReply(
-                                '❌ No se pudo recuperar el concurso. Revisa los logs del bot.'
-                            )
-                        );
-                    }),
-                onSuccess: result => {
-                    switch (result._tag) {
-                        case 'Recovered': {
-                            const totalWinners = result.memeWinners + result.boneWinners;
-                            const summary =
-                                totalWinners > 0
-                                    ? `${result.memeWinners} meme(s) y ${result.boneWinners} hueso(s)`
-                                    : 'ningún ganador con reacciones válidas';
-                            return discordCall('interaction.editReply', () =>
-                                interaction.editReply(
-                                    `✅ Recuperación terminada para <t:${Math.floor(result.startDate.getTime() / 1000)}:F> ` +
-                                        `→ <t:${Math.floor(result.endDate.getTime() / 1000)}:F>.\n` +
-                                        `Se revisaron ${result.scannedMessages} mensajes y se encontraron ${summary}.\n` +
-                                        `Los resultados se publicaron en <#${result.contest.channelId}>.`
-                                )
-                            );
-                        }
-                        case 'NoFailedContest':
-                            return discordCall('interaction.editReply', () =>
-                                interaction.editReply(
-                                    '✅ No hay un concurso semanal fallido pendiente de recuperar.'
-                                )
-                            );
-                        case 'NotFinished':
-                            return discordCall('interaction.editReply', () =>
-                                interaction.editReply(
-                                    `⏳ El período que falta recuperar todavía no termina. ` +
-                                        `Finaliza <t:${Math.floor(result.endDate.getTime() / 1000)}:R>.`
-                                )
-                            );
-                        case 'MemeChannelUnavailable':
-                            return discordCall('interaction.editReply', () =>
-                                interaction.editReply(
-                                    `❌ No encuentro el canal "${MEME_CHANNEL_NAME}" para calcular los ganadores.`
-                                )
-                            );
-                    }
-                },
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        yield* discordCall('interaction.reply', () =>
+            interaction.reply({
+                content: '❌ Solo los administradores pueden usar este comando.',
+                ephemeral: true,
             })
         );
+        return;
     }
-);
+
+    if (announce && !confirm) {
+        yield* discordCall('interaction.reply', () =>
+            interaction.reply({
+                content: '❌ `announce` solo se puede usar junto con `confirm:true`.',
+                ephemeral: true,
+            })
+        );
+        return;
+    }
+
+    yield* discordCall('interaction.deferReply', () => interaction.deferReply({ ephemeral: true }));
+
+    yield* memeManager.recoverMissedWeeklyContests({ confirm, announce }).pipe(
+        Effect.flatMap(result => {
+            const chunks =
+                result._tag === 'Scanned'
+                    ? formatRecoveryReport(result)
+                    : [`❌ No encuentro el canal "${MEME_CHANNEL_NAME}".`];
+            return Effect.forEach(
+                chunks,
+                (content, index) =>
+                    discordCall('interaction.reply', () =>
+                        index === 0
+                            ? interaction.editReply({ content, allowedMentions: { parse: [] } })
+                            : interaction.followUp({
+                                  content,
+                                  ephemeral: true,
+                                  allowedMentions: { parse: [] },
+                              })
+                    ),
+                { discard: true }
+            );
+        }),
+        Effect.catchCause(cause =>
+            Effect.gen(function* () {
+                yield* Effect.logError('Error in handleMemeRecoverCommand:', cause);
+                yield* discordCall('interaction.editReply', () =>
+                    interaction.editReply(
+                        '❌ No se pudo revisar los concursos. Revisa los logs del bot.'
+                    )
+                ).pipe(Effect.ignore);
+            })
+        )
+    );
+});
 
 export const memeSlashCommands = [
     new SlashCommandBuilder()
@@ -448,7 +440,15 @@ export const memeSlashCommands = [
                 .setRequired(true)
         ),
     new SlashCommandBuilder()
-        .setName(MEME_RECOVER_CONTEST_COMMAND)
-        .setDescription('Calcula ganadores del último concurso semanal fallido (admin only)')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        .setName(MEME_RECOVER_COMMAND)
+        .setDescription('Revisa los viernes sin cerrar desde el último concurso (admin only)')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .addBooleanOption(option =>
+            option.setName('confirm').setDescription('Guarda los ganadores en la base de datos')
+        )
+        .addBooleanOption(option =>
+            option
+                .setName('announce')
+                .setDescription('Publica los ganadores en el canal (requiere confirm)')
+        ),
 ];
